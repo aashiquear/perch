@@ -87,6 +87,9 @@ pub struct InputConfig {
     pub gaze_focus_ms: u32,
     /// Hotkey (HID usage) that toggles routing back to local, e.g. ScrollLock.
     pub panic_key_usage: u16,
+    /// Second toggle for keyboards without Scroll Lock: this HID usage pressed
+    /// with Ctrl+Alt held (default `P`). 0 disables.
+    pub grab_chord_usage: u16,
 }
 
 /// Buttons section.
@@ -134,7 +137,8 @@ impl Default for InputConfig {
             share_local_devices: true,
             edge_resistance_px: 40.0,
             gaze_focus_ms: 0,
-            panic_key_usage: 0x47, // Scroll Lock
+            panic_key_usage: 0x47,  // Scroll Lock
+            grab_chord_usage: 0x13, // Ctrl+Alt+P
         }
     }
 }

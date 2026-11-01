@@ -25,6 +25,7 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 pub mod keymap;
+pub mod touchpad;
 
 /// Errors.
 #[derive(Debug, thiserror::Error)]

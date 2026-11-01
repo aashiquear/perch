@@ -9,6 +9,7 @@
 //! is a kernel-level virtual device. Capture via evdev also works everywhere
 //! but requires the `input` group. This is why we don't use XTest/libei here.
 
+use crate::touchpad::{Raw, Touchpad, TouchpadConfig};
 use crate::{keymap, AbsTarget, InputError, InputEvent, InputSink, InputSource};
 use evdev::{
     uinput::VirtualDevice, AbsInfo, AbsoluteAxisCode, AttributeSet, EventType, InputEvent as EvEvent, KeyCode,
@@ -206,18 +207,19 @@ impl InputSink for UinputSink {
     }
 }
 
-/// Captures all keyboards and mice via evdev. Grabs them exclusively when
-/// `set_grabbed(true)`.
+/// Captures all keyboards, mice and touchpads via evdev. Grabs them
+/// exclusively when `set_grabbed(true)`.
 pub struct EvdevSource {
-    devices: Vec<evdev::Device>,
+    /// Each device with its touchpad interpreter when it is an absolute pad.
+    devices: Vec<(evdev::Device, Option<Touchpad>)>,
     grabbed: bool,
     pending: std::collections::VecDeque<InputEvent>,
     mods: u8,
 }
 
 impl EvdevSource {
-    /// Open every device that looks like a keyboard or mouse (and is not our
-    /// own virtual device).
+    /// Open every device that looks like a keyboard, mouse or touchpad (and
+    /// is not our own virtual device).
     pub fn open_all() -> Result<Self, InputError> {
         let mut devices = Vec::new();
         for (_, d) in evdev::enumerate() {
@@ -227,12 +229,40 @@ impl EvdevSource {
             }
             let keys = d.supported_keys();
             let is_kbd = keys.is_some_and(|k| k.contains(KeyCode::KEY_A));
-            let is_mouse = keys.is_some_and(|k| k.contains(KeyCode::BTN_LEFT))
-                && d.supported_relative_axes()
-                    .is_some_and(|r| r.contains(RelativeAxisCode::REL_X));
-            if is_kbd || is_mouse {
+            let has_rel = d
+                .supported_relative_axes()
+                .is_some_and(|r| r.contains(RelativeAxisCode::REL_X));
+            let is_mouse = keys.is_some_and(|k| k.contains(KeyCode::BTN_LEFT)) && has_rel;
+            let is_pad = !has_rel
+                && keys.is_some_and(|k| k.contains(KeyCode::BTN_TOUCH) && k.contains(KeyCode::BTN_TOOL_FINGER))
+                && d.supported_absolute_axes()
+                    .is_some_and(|a| a.contains(AbsoluteAxisCode::ABS_X) && a.contains(AbsoluteAxisCode::ABS_Y));
+            if is_pad {
+                let pad = match d.get_absinfo() {
+                    Ok(iter) => {
+                        let mut cfg = TouchpadConfig::default();
+                        let (mut rx, mut ry) = (0, 0);
+                        for (axis, info) in iter {
+                            if axis == AbsoluteAxisCode::ABS_X {
+                                cfg.units_per_mm_x = info.resolution() as f32;
+                                rx = info.maximum() - info.minimum();
+                            } else if axis == AbsoluteAxisCode::ABS_Y {
+                                cfg.units_per_mm_y = info.resolution() as f32;
+                                ry = info.maximum() - info.minimum();
+                            }
+                        }
+                        tracing::info!(name, rx, ry, upm = ?(cfg.units_per_mm_x, cfg.units_per_mm_y), "capturing touchpad");
+                        Touchpad::new(cfg, rx, ry)
+                    }
+                    Err(e) => {
+                        tracing::warn!(name, "touchpad absinfo: {e}");
+                        continue;
+                    }
+                };
+                devices.push((d, Some(pad)));
+            } else if is_kbd || is_mouse {
                 tracing::info!(name, "capturing input device");
-                devices.push(d);
+                devices.push((d, None));
             }
         }
         if devices.is_empty() {
@@ -332,11 +362,38 @@ impl InputSource for EvdevSource {
             // Simple round-robin poll; the daemon runs this on its own thread.
             // (A production version should use epoll over all fds.)
             let mut raw: Vec<EvEvent> = Vec::new();
-            for d in &mut self.devices {
-                if let Ok(events) = d.fetch_events() {
-                    raw.extend(events);
+            let mut touch: Vec<InputEvent> = Vec::new();
+            for (d, pad) in &mut self.devices {
+                let Ok(events) = d.fetch_events() else { continue };
+                match pad {
+                    None => raw.extend(events),
+                    Some(pad) => {
+                        for ev in events {
+                            let r = match ev.event_type() {
+                                EventType::ABSOLUTE => Raw::Abs {
+                                    code: ev.code(),
+                                    value: ev.value(),
+                                },
+                                EventType::KEY => Raw::Key {
+                                    code: ev.code(),
+                                    down: ev.value() != 0,
+                                },
+                                EventType::SYNCHRONIZATION if ev.code() == 0 => {
+                                    let t_us = ev
+                                        .timestamp()
+                                        .duration_since(std::time::UNIX_EPOCH)
+                                        .map(|d| d.as_micros() as u64)
+                                        .unwrap_or(0);
+                                    Raw::Sync { t_us }
+                                }
+                                _ => continue,
+                            };
+                            pad.feed(r, &mut touch);
+                        }
+                    }
                 }
             }
+            self.pending.extend(touch);
             for ev in raw {
                 if let Some(t) = self.translate(ev) {
                     self.pending.push_back(t);
@@ -352,7 +409,7 @@ impl InputSource for EvdevSource {
         if grabbed == self.grabbed {
             return Ok(());
         }
-        for d in &mut self.devices {
+        for (d, _) in &mut self.devices {
             if grabbed {
                 d.grab()?;
             } else {

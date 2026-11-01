@@ -22,6 +22,11 @@ time is sharp, the rest is peripheral.
    flick doesn't jump windows. Look-to-focus is opt-in with a dwell time.
 6. **One keyboard.** Whatever is focused gets the keys, on whatever machine.
    Scroll Lock (configurable) is the panic key: input returns to local.
+   Keyboards without Scroll Lock (Apple) use Ctrl+Alt+P (`grab_chord_usage`).
+   Laptop touchpads with no relative axes are interpreted in Rust
+   (`perch-input::touchpad`): one finger moves, tap clicks (two-finger tap =
+   right), two fingers scroll naturally, physical click with two fingers =
+   right button.
 7. **Black is transparent.** No wallpaper, no chrome. The only lit pixels are
    windows and a 2 px focus outline.
 

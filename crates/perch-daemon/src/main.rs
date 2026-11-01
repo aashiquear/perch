@@ -93,13 +93,14 @@ fn main() -> anyhow::Result<()> {
     // Commands and raw input from the on-glasses UI → engine loop.
     let (ui_tx, ui_rx) = tokio::sync::mpsc::unbounded_channel::<capture::UiMsg>();
     // Physical mouse/keyboard, grabbed from the OS while `grab` is set, feed
-    // the spatial pointer on the glasses. Scroll Lock toggles the grab.
+    // the spatial pointer on the glasses. Scroll Lock or Ctrl+Alt+P toggles it.
     let grab = Arc::new(std::sync::atomic::AtomicBool::new(false));
     #[cfg(all(target_os = "linux", feature = "linux-input", feature = "render"))]
     let device_rx = {
         let (tx, rx) = std::sync::mpsc::channel::<perch_proto::InputEvent>();
         let grab = Arc::clone(&grab);
         let panic_key = cfg.input.panic_key_usage;
+        let chord_key = cfg.input.grab_chord_usage;
         if cfg.input.share_local_devices {
             std::thread::Builder::new()
                 .name("perch-evdev".into())
@@ -135,8 +136,15 @@ fn main() -> anyhow::Result<()> {
                                 break;
                             }
                         };
-                        if let perch_proto::InputEvent::Key { usage, down: true, .. } = ev {
-                            if usage == panic_key {
+                        if let perch_proto::InputEvent::Key {
+                            usage,
+                            down: true,
+                            mods,
+                        } = ev
+                        {
+                            // Ctrl+Alt+<chord> (either side) or the panic key.
+                            let ctrl_alt = mods & 1 != 0 && mods & 4 != 0;
+                            if usage == panic_key || (chord_key != 0 && usage == chord_key && ctrl_alt) {
                                 grab.store(!grabbed, Ordering::Relaxed);
                                 continue;
                             }

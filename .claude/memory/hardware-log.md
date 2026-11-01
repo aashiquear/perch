@@ -71,3 +71,4 @@
 - 2026-11-01 Restore with the saved token re-attached 2 window streams in ~150 ms with no dialog
   (the earlier >60 s hang was a stale token from a session the portal no longer had). Real windows
   render; GNOME window streams are 4096×2560 BGRA. Unpaced render loop hit ~4800 fps → paced to 250.
+- 2026-11-01 host laptop: Apple T2 internal trackpad is evdev event16, absolute-only (ABS_X -7456..7976 @96/mm, ABS_Y -9283..163 @94/mm, BTN_TOUCH/TOOL_FINGER/DOUBLETAP/TRIPLETAP, BTN_LEFT, no REL axes); internal keyboard has no Scroll Lock. Group changes need a full GNOME re-login (no sg/newgrp on this box).
