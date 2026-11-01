@@ -224,6 +224,15 @@ pub async fn run(
                         let fx = engine.lock().await.command(me, cmd);
                         apply_effects(fx, &server, &dev, &mut local_sink, &engine, &backend, &pick_tx).await;
                     }
+                    UiMsg::GrabChanged(grabbed) => {
+                        if !grabbed {
+                            if let Ok(mut b) = backend.try_lock() {
+                                if let Some(b) = b.as_mut() {
+                                    b.release_pointer();
+                                }
+                            }
+                        }
+                    }
                     UiMsg::Input { window, events } => {
                         let source = engine.lock().await.ws.get(window).map(|w| w.source.clone());
                         let Some(source) = source else { continue };
@@ -365,6 +374,13 @@ async fn apply_effects(
             }
             Effect::PickSources { multiple } => {
                 spawn_pick(Arc::clone(backend), None, multiple, pick_tx.clone());
+            }
+            Effect::ReleaseSource(source) => {
+                if let Ok(mut b) = backend.lock() {
+                    if let Some(b) = b.as_mut() {
+                        b.release(&source);
+                    }
+                }
             }
             Effect::DeliverInput { peer, events } => {
                 let me = engine.lock().await.me.peer_id;

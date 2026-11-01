@@ -111,6 +111,8 @@ fn main() -> anyhow::Result<()> {
         let grab = Arc::clone(&grab);
         let panic_key = cfg.input.panic_key_usage;
         let chord_key = cfg.input.grab_chord_usage;
+        let send_key = cfg.input.send_chord_usage;
+        let ui_tx2 = ui_tx.clone();
         if cfg.input.share_local_devices {
             std::thread::Builder::new()
                 .name("perch-evdev".into())
@@ -132,6 +134,7 @@ fn main() -> anyhow::Result<()> {
                                 Ok(()) => {
                                     grabbed = want;
                                     tracing::info!(grabbed, "input grab");
+                                    let _ = ui_tx2.send(capture::UiMsg::GrabChanged(grabbed));
                                 }
                                 Err(e) => {
                                     tracing::warn!("input grab: {e}");
@@ -154,6 +157,12 @@ fn main() -> anyhow::Result<()> {
                         {
                             // Ctrl+Alt+<chord> (either side) or the panic key.
                             let ctrl_alt = mods & 1 != 0 && mods & 4 != 0;
+                            if send_key != 0 && usage == send_key && ctrl_alt {
+                                let _ = ui_tx2.send(capture::UiMsg::Command(perch_proto::Command::PickSources {
+                                    multiple: false,
+                                }));
+                                continue;
+                            }
                             if usage == panic_key || (chord_key != 0 && usage == chord_key && ctrl_alt) {
                                 grab.store(!grabbed, Ordering::Relaxed);
                                 continue;

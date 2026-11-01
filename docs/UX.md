@@ -116,3 +116,23 @@ it (that is M3: input routing).
   the devices back to the OS.
 - **Spans**: `perch span <id> 2` makes a window two layout blocks wide
   (`--block-w`), whatever its pixel size; `0` returns to automatic.
+
+## Glasses displays on GNOME (since 1.4, replaces window capture)
+
+On GNOME each spatial window is a **virtual monitor** (Mutter `RecordVirtual`),
+1920×1080 by default, created to the right of the physical displays. The
+app lives only on the glasses; when its spatial window is removed, or the
+daemon exits, the monitor disappears and GNOME moves the app back to the
+laptop. Nothing persists across restarts: send windows again.
+
+- **Send the focused app**: Ctrl+Alt+G (`send_chord_usage`), or the SEND
+  WINDOW tile / panel button (those move whatever is focused, which may be
+  Perch's own panel). The daemon injects GNOME's `move-to-monitor-right`
+  shortcut as many times as monitors lie to the right of the laptop.
+- **Pointer**: while grabbed, the spatial pointer is placed absolutely inside
+  the hovered glasses display through Mutter's RemoteDesktop session, so it
+  moves freely between glasses windows and never clamps. Releasing the grab
+  (Ctrl+Alt+P) throws the OS pointer back onto the leftmost physical display.
+- **Keyboard** goes to the focused app; clicking a glasses window focuses it.
+- Pointer updates are coalesced per batch and sent without waiting for
+  replies, which is what removed the lag of the portal-based first attempt.

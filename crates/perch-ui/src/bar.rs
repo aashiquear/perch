@@ -109,7 +109,7 @@ impl Default for Bar {
                 b("MORE ROWS", Icon::RowsPlus, BarAction::RowsPlus),
                 b("NEARER", Icon::Nearer, BarAction::Nearer),
                 b("FARTHER", Icon::Farther, BarAction::Farther),
-                b("PICK WINDOWS", Icon::Pick, BarAction::Pick),
+                b("SEND WINDOW", Icon::Pick, BarAction::Pick),
                 b("CALIBRATE", Icon::Calibrate, BarAction::Calibrate),
                 b("CLEAR ALL", Icon::Clear, BarAction::Clear),
                 b("GRAB MOUSE / KEYS", Icon::Grab, BarAction::Grab),

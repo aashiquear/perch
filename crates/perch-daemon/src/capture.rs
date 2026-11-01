@@ -23,6 +23,8 @@ pub enum UiMsg {
         /// Events.
         events: Vec<perch_proto::InputEvent>,
     },
+    /// The physical-input grab was switched on or off.
+    GrabChanged(bool),
 }
 
 /// Open the platform backend, if any.

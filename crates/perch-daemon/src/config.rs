@@ -90,6 +90,9 @@ pub struct InputConfig {
     /// Second toggle for keyboards without Scroll Lock: this HID usage pressed
     /// with Ctrl+Alt held (default `P`). 0 disables.
     pub grab_chord_usage: u16,
+    /// Ctrl+Alt+<this HID usage> sends the focused window to a new glasses
+    /// display (default `G`). 0 disables.
+    pub send_chord_usage: u16,
 }
 
 /// Buttons section.
@@ -139,6 +142,7 @@ impl Default for InputConfig {
             gaze_focus_ms: 0,
             panic_key_usage: 0x47,  // Scroll Lock
             grab_chord_usage: 0x13, // Ctrl+Alt+P
+            send_chord_usage: 0x0a, // Ctrl+Alt+G
         }
     }
 }

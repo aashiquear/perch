@@ -33,7 +33,15 @@ window → one spatial window each. Virtual displays (for "extend"):
 GNOME Mutter `org.gnome.Mutter.ScreenCast.RecordVirtual`, wlroots
 `wlr-virtual-output`, fallback `evdi`.
 
-**Input into captured apps:** the capture session is an xdg **RemoteDesktop**
+**GNOME native (default when `org.gnome.Mutter.RemoteDesktop` is on the bus):**
+`perch-capture::gnome` creates one virtual monitor per spatial window
+(`org.gnome.Mutter.ScreenCast.Session.RecordVirtual`, size negotiated through
+the PipeWire format) linked to a `org.gnome.Mutter.RemoteDesktop` session for
+input (`NotifyPointerMotionAbsolute(stream, x, y)` in stream pixels, keycodes,
+buttons, discrete axes). No dialogs, no `/dev/uinput`. See docs/UX.md
+"Glasses displays on GNOME". The portal path below remains the fallback.
+
+**Portal fallback:** the capture session is an xdg **RemoteDesktop**
 portal session carrying the screen-cast sources, so pointer and keyboard events
 are sent through the portal in *stream coordinates*: a window capture gets exact
 pointer placement even though the portal never says where the window is.

@@ -61,7 +61,7 @@ pub struct PickedStream {
     /// Logical desktop position (monitors only).
     pub position: Option<(i32, i32)>,
     /// The PipeWire connection of the portal session that owns this node.
-    session: Arc<PwSession>,
+    pub(crate) session: Arc<PwSession>,
 }
 
 enum PortalReq {
@@ -606,7 +606,7 @@ fn key_state(down: bool) -> KeyState {
 
 /// GNOME's monitor layout via `org.gnome.Mutter.DisplayConfig.GetCurrentState`.
 /// Other compositors: empty (TODO wlr-output-management).
-async fn monitor_layout() -> Result<Vec<LogicalMonitor>, String> {
+pub(crate) async fn monitor_layout() -> Result<Vec<LogicalMonitor>, String> {
     use ashpd::zbus;
     use std::collections::HashMap;
     type Props = HashMap<String, zbus::zvariant::OwnedValue>;
@@ -664,20 +664,20 @@ async fn monitor_layout() -> Result<Vec<LogicalMonitor>, String> {
 // ---------------------------------------------------------------------------
 
 #[derive(Default)]
-struct Shared {
-    latest: Option<Frame>,
-    seq: u64,
-    size: (u32, u32),
-    ended: bool,
+pub(crate) struct Shared {
+    pub(crate) latest: Option<Frame>,
+    pub(crate) seq: u64,
+    pub(crate) size: (u32, u32),
+    pub(crate) ended: bool,
 }
 
-struct Slot {
-    m: Mutex<Shared>,
-    cv: Condvar,
+pub(crate) struct Slot {
+    pub(crate) m: Mutex<Shared>,
+    pub(crate) cv: Condvar,
 }
 
 impl Slot {
-    fn end(&self) {
+    pub(crate) fn end(&self) {
         let mut s = self.m.lock().unwrap();
         s.ended = true;
         self.cv.notify_all();
@@ -691,6 +691,8 @@ enum PwCmd {
         slot: Arc<Slot>,
         /// Window stream: crop to the opaque window and publish the crop.
         crop: Option<Arc<Mutex<Option<crate::Crop>>>>,
+        /// Negotiate exactly this size (virtual monitors take theirs from it).
+        fixed: Option<(u32, u32)>,
         reply: mpsc::Sender<Result<u64, String>>,
     },
     Disconnect(u64),
@@ -707,7 +709,16 @@ pub struct PwSession {
 }
 
 impl PwSession {
-    fn start(fd: OwnedFd) -> Result<Self, CaptureError> {
+    pub(crate) fn start(fd: OwnedFd) -> Result<Self, CaptureError> {
+        Self::start_with(Some(fd))
+    }
+
+    /// Connect to the user's default PipeWire socket (Mutter-native streams).
+    pub(crate) fn start_default() -> Result<Self, CaptureError> {
+        Self::start_with(None)
+    }
+
+    fn start_with(fd: Option<OwnedFd>) -> Result<Self, CaptureError> {
         let (cmd_tx, cmd_rx) = pipewire::channel::channel::<PwCmd>();
         let (ready_tx, ready_rx) = mpsc::channel::<Result<(), String>>();
         let thread = std::thread::Builder::new()
@@ -730,12 +741,13 @@ impl PwSession {
         })
     }
 
-    fn connect(
+    pub(crate) fn connect(
         &self,
         node_id: u32,
         fps: u32,
         slot: Arc<Slot>,
         crop: Option<Arc<Mutex<Option<crate::Crop>>>>,
+        fixed: Option<(u32, u32)>,
     ) -> Result<u64, CaptureError> {
         let (reply, rx) = mpsc::channel();
         self.cmd
@@ -744,6 +756,7 @@ impl PwSession {
                 fps,
                 slot,
                 crop,
+                fixed,
                 reply,
             })
             .map_err(|_| CaptureError::Ended)?;
@@ -787,7 +800,9 @@ impl PipeWireSource {
             cv: Condvar::new(),
         });
         let crop = (!matches!(stream.kind, Some(SourceType::Monitor))).then(|| Arc::clone(&stream.crop));
-        let key = stream.session.connect(stream.node_id, fps, Arc::clone(&slot), crop)?;
+        let key = stream
+            .session
+            .connect(stream.node_id, fps, Arc::clone(&slot), crop, None)?;
         Ok(Self {
             source,
             slot,
@@ -795,6 +810,13 @@ impl PipeWireSource {
             key,
             session: stream.session,
         })
+    }
+}
+
+impl PwSession {
+    /// Tear down one stream.
+    pub(crate) fn disconnect(&self, key: u64) {
+        let _ = self.cmd.send(PwCmd::Disconnect(key));
     }
 }
 
@@ -843,7 +865,7 @@ struct UserData {
 type LiveStream = (pipewire::stream::Stream, pipewire::stream::StreamListener<UserData>);
 
 fn pw_session_loop(
-    fd: OwnedFd,
+    fd: Option<OwnedFd>,
     cmd_rx: pipewire::channel::Receiver<PwCmd>,
     ready: mpsc::Sender<Result<(), String>>,
 ) -> Result<(), String> {
@@ -855,7 +877,11 @@ fn pw_session_loop(
     pw::init();
     let mainloop = pw::main_loop::MainLoop::new(None).map_err(|e| e.to_string())?;
     let context = pw::context::Context::new(&mainloop).map_err(|e| e.to_string())?;
-    let core = match context.connect_fd(fd, None) {
+    let core = match fd {
+        Some(fd) => context.connect_fd(fd, None),
+        None => context.connect(None),
+    };
+    let core = match core {
         Ok(c) => c,
         Err(e) => {
             let _ = ready.send(Err(format!("pipewire connect: {e}")));
@@ -872,9 +898,10 @@ fn pw_session_loop(
             fps,
             slot,
             crop,
+            fixed,
             reply,
         } => {
-            let res = connect_stream(&core, node_id, fps, slot, crop).map(|live| {
+            let res = connect_stream(&core, node_id, fps, slot, crop, fixed).map(|live| {
                 let key = next_key.get();
                 next_key.set(key + 1);
                 streams2.borrow_mut().insert(key, live);
@@ -907,7 +934,12 @@ fn connect_stream(
     fps: u32,
     slot: Arc<Slot>,
     crop_out: Option<Arc<Mutex<Option<crate::Crop>>>>,
+    fixed: Option<(u32, u32)>,
 ) -> Result<LiveStream, String> {
+    let (size_def, size_min, size_max) = match fixed {
+        Some((w, h)) => ((w, h), (w, h), (w, h)),
+        None => ((1920, 1080), (1, 1), (8192, 8192)),
+    };
     use pipewire as pw;
     use pw::spa;
     use spa::pod::{Pod, Value};
@@ -1108,13 +1140,16 @@ fn connect_stream(
             Range,
             Rectangle,
             spa::utils::Rectangle {
-                width: 1920,
-                height: 1080
+                width: size_def.0,
+                height: size_def.1
             },
-            spa::utils::Rectangle { width: 1, height: 1 },
             spa::utils::Rectangle {
-                width: 8192,
-                height: 8192
+                width: size_min.0,
+                height: size_min.1
+            },
+            spa::utils::Rectangle {
+                width: size_max.0,
+                height: size_max.1
             }
         ),
         spa::pod::property!(

@@ -40,6 +40,8 @@ pub enum Effect {
         /// Allow several sources at once.
         multiple: bool,
     },
+    /// A local window was removed: let the capture backend free its source.
+    ReleaseSource(perch_proto::Source),
 }
 
 /// Engine state.
@@ -157,8 +159,14 @@ impl Engine {
                 self.ws.upsert(window);
             }
             Command::RemoveWindow { id } => {
+                let source = self.ws.get(id).map(|w| w.source.clone());
                 if self.ws.remove(id).is_ok() {
                     fx.push(Effect::Broadcast(Event::WindowRemoved { id }));
+                    if let Some(s) = source {
+                        if perch_input::source_peer(&s) == self.me.peer_id {
+                            fx.push(Effect::ReleaseSource(s));
+                        }
+                    }
                     fx.push(Effect::Broadcast(Event::FocusChanged { id: self.ws.focused }));
                 } else {
                     fx.push(err("no such window"));

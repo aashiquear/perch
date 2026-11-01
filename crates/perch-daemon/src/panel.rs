@@ -249,7 +249,11 @@ impl ControlPanel {
         ui.separator();
 
         ui.horizontal_wrapped(|ui| {
-            if ui.button("Pick windows…").clicked() {
+            if ui
+                .button("Send focused window")
+                .on_hover_text("Ctrl+Alt+G from the app itself; this button moves whatever is focused")
+                .clicked()
+            {
                 out.push(Command::PickSources { multiple: true });
             }
             if ui.button("Arrange").clicked() {

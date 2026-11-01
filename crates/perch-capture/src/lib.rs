@@ -152,6 +152,14 @@ pub trait CaptureBackend: Send {
         false
     }
 
+    /// A spatial window showing `source` was removed; backends that created
+    /// something for it (a virtual monitor) tear it down so its apps return.
+    fn release(&mut self, _source: &Source) {}
+
+    /// The user released the input grab: bring the OS pointer back onto a
+    /// physical display if the backend parked it on a virtual one.
+    fn release_pointer(&mut self) {}
+
     /// Close platform sessions cleanly before exit. Portals persist the
     /// restore selection only when the session is closed, so a daemon that
     /// is killed without this asks again next start.
@@ -168,6 +176,10 @@ pub trait CaptureBackend: Send {
 pub fn default_backend(peer: uuid::Uuid) -> Result<Box<dyn CaptureBackend>, CaptureError> {
     #[cfg(all(target_os = "linux", feature = "linux-pipewire"))]
     {
+        match gnome::GnomeBackend::new(peer) {
+            Ok(b) => return Ok(Box::new(b)),
+            Err(e) => tracing::info!("GNOME virtual-monitor backend unavailable ({e}); using the portal"),
+        }
         return Ok(Box::new(linux::PortalBackend::new(peer)?));
     }
     #[allow(unreachable_code)]
@@ -315,6 +327,34 @@ pub fn downscale2x(src: &[u8], w: u32, h: u32, stride: usize) -> (Vec<u8>, u32, 
     (out, ow, oh)
 }
 
+/// Drop pointer moves that a later move supersedes before any button,
+/// scroll or key event: a queue of per-frame positions only needs its last
+/// one, and sending every one over D-Bus is what makes a remote pointer lag.
+pub fn coalesce_moves(events: Vec<perch_proto::InputEvent>) -> Vec<perch_proto::InputEvent> {
+    use perch_proto::InputEvent as E;
+    let mut out: Vec<E> = Vec::with_capacity(events.len());
+    for ev in events {
+        match ev {
+            E::MouseMoveAbs { .. } => {
+                if matches!(out.last(), Some(E::MouseMoveAbs { .. })) {
+                    out.pop();
+                }
+                out.push(ev);
+            }
+            E::MouseMove { dx, dy } => {
+                if let Some(E::MouseMove { dx: px, dy: py }) = out.last_mut() {
+                    *px += dx;
+                    *py += dy;
+                } else {
+                    out.push(ev);
+                }
+            }
+            other => out.push(other),
+        }
+    }
+    out
+}
+
 /// A sub-rectangle of a stream: `(x, y, width, height)` in stream pixels.
 pub type Crop = (u32, u32, u32, u32);
 
@@ -379,6 +419,8 @@ pub fn now_us() -> u64 {
 }
 
 #[cfg(all(target_os = "linux", feature = "linux-pipewire"))]
+pub mod gnome;
+#[cfg(all(target_os = "linux", feature = "linux-pipewire"))]
 pub mod linux;
 
 #[cfg(test)]
@@ -440,5 +482,22 @@ mod tests {
         assert!(cropped.iter().skip(3).step_by(4).all(|a| *a == 255));
         assert_eq!(stabilise_crop(Some((2, 1, 3, 2)), (3, 1, 3, 2), 1), (2, 1, 3, 2));
         assert_eq!(stabilise_crop(Some((2, 1, 3, 2)), (6, 1, 3, 2), 1), (6, 1, 3, 2));
+    }
+
+    #[test]
+    fn coalesce_keeps_last_move_before_each_button() {
+        use perch_proto::{InputEvent as E, MouseButton};
+        let mv = |x: f32| E::MouseMoveAbs { x, y: 0.0 };
+        let click = E::MouseButton {
+            button: MouseButton::Left,
+            down: true,
+        };
+        let out = coalesce_moves(vec![mv(0.1), mv(0.2), mv(0.3), click, mv(0.4), mv(0.5)]);
+        assert_eq!(out, vec![mv(0.3), click, mv(0.5)]);
+        let rel = coalesce_moves(vec![
+            E::MouseMove { dx: 1.0, dy: 2.0 },
+            E::MouseMove { dx: 3.0, dy: -1.0 },
+        ]);
+        assert_eq!(rel, vec![E::MouseMove { dx: 4.0, dy: 1.0 }]);
     }
 }
