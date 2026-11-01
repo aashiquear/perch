@@ -296,14 +296,24 @@ impl ControlPanel {
         egui::Image::new((tex.id(), egui::vec2(size, size)))
     }
 
-    /// A big icon + label button filling half the row.
-    fn big_button(&self, ui: &mut egui::Ui, icon: Icon, label: &str, hint: &str, selected: bool) -> bool {
-        let w = (ui.available_width() - 8.0) / 2.0;
-        let text = egui::RichText::new(label).size(15.0);
-        let btn = egui::Button::image_and_text(self.icon(icon, 28.0), text)
-            .min_size(egui::vec2(w, 54.0))
-            .selected(selected);
-        ui.add(btn).on_hover_text(hint).clicked()
+    /// A square icon-only button with its name and keyboard shortcut to the
+    /// right. Returns true when clicked.
+    fn action(&self, ui: &mut egui::Ui, icon: Icon, label: &str, shortcut: &str, hint: &str, selected: bool) -> bool {
+        let mut clicked = false;
+        ui.horizontal(|ui| {
+            let btn = egui::Button::image(self.icon(icon, 30.0))
+                .min_size(egui::vec2(52.0, 52.0))
+                .selected(selected);
+            clicked = ui.add(btn).on_hover_text(hint).clicked();
+            ui.vertical(|ui| {
+                ui.add_space(6.0);
+                ui.label(egui::RichText::new(label).size(15.0));
+                if !shortcut.is_empty() {
+                    ui.label(egui::RichText::new(shortcut).small().weak());
+                }
+            });
+        });
+        clicked
     }
 
     fn ui(
@@ -414,43 +424,47 @@ impl ControlPanel {
         layout_map(ui, s);
         ui.add_space(6.0);
 
-        // ---- actions ---------------------------------------------------------
-        ui.horizontal(|ui| {
-            if self.big_button(
-                ui,
+        // ---- actions: square icon buttons, name + shortcut beside ----------
+        ui.columns(2, |c| {
+            if self.action(
+                &mut c[0],
                 Icon::Pick,
                 "To glasses",
-                "Then click the app window to move. Hotkey: Ctrl+Alt+G in the app.",
+                "Ctrl+Alt+G in the app",
+                "Then click the app window to move.",
                 self.pending_move == Some(FULL),
             ) {
                 self.pending_move = Some(FULL);
                 self.move_fire_at = None;
             }
-            if self.big_button(
-                ui,
+            if self.action(
+                &mut c[1],
                 Icon::Resize,
-                "To glasses · half width",
-                "Then click the app window to move; 960×1080 display. Hotkey: Ctrl+Alt+H.",
+                "To glasses, half width",
+                "Ctrl+Alt+H in the app",
+                "Then click the app window to move; 960×1080 display.",
                 self.pending_move == Some(HALF),
             ) {
                 self.pending_move = Some(HALF);
                 self.move_fire_at = None;
             }
         });
-        ui.horizontal(|ui| {
-            if self.big_button(
-                ui,
+        ui.columns(2, |c| {
+            if self.action(
+                &mut c[0],
                 Icon::Grab,
                 if grabbed { "Back to laptop mode" } else { "Glasses mode" },
-                "Mouse & keyboard go to the glasses while on. Hotkey: Ctrl+Alt+P.",
+                "Ctrl+Alt+P",
+                "Mouse & keyboard go to the glasses while on.",
                 grabbed,
             ) {
                 *grab_toggle = true;
             }
-            if self.big_button(
-                ui,
+            if self.action(
+                &mut c[1],
                 Icon::ToLaptop,
                 "All to laptop",
+                "",
                 "Remove every window; apps return to the laptop",
                 false,
             ) {
@@ -459,20 +473,22 @@ impl ControlPanel {
                 }
             }
         });
-        ui.horizontal(|ui| {
-            if self.big_button(
-                ui,
+        ui.columns(2, |c| {
+            if self.action(
+                &mut c[0],
                 Icon::Recenter,
                 "Recenter",
+                "temple button",
                 "Current gaze becomes straight ahead",
                 false,
             ) {
                 out.push(Command::Recenter);
             }
-            if self.big_button(
-                ui,
+            if self.action(
+                &mut c[1],
                 Icon::CentreHere,
                 "Centre grid here",
+                "",
                 "Put the grid where you are looking",
                 false,
             ) {
@@ -485,24 +501,26 @@ impl ControlPanel {
                 });
             }
         });
-        ui.horizontal(|ui| {
-            if self.big_button(
-                ui,
+        ui.columns(2, |c| {
+            if self.action(
+                &mut c[0],
                 Icon::Arrange,
                 if self.arrange_open {
                     "Arrange ▴"
                 } else {
                     "Arrange ▾"
                 },
+                "presets below",
                 "Re-flow the grid, or pick a preset",
                 self.arrange_open,
             ) {
                 self.arrange_open = !self.arrange_open;
             }
-            if self.big_button(
-                ui,
+            if self.action(
+                &mut c[1],
                 Icon::Calibrate,
                 "Calibrate (30 s)",
+                "",
                 "Glasses still on a table",
                 false,
             ) {

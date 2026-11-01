@@ -363,14 +363,10 @@ pub fn coalesce_moves(events: Vec<perch_proto::InputEvent>) -> Vec<perch_proto::
                 }
                 out.push(ev);
             }
-            E::MouseMove { dx, dy } => {
-                if let Some(E::MouseMove { dx: px, dy: py }) = out.last_mut() {
-                    *px += dx;
-                    *py += dy;
-                } else {
-                    out.push(ev);
-                }
-            }
+            // Relative moves stay as they are: the compositor clamps each one
+            // to the monitor edges, so a sum is not the same as the sequence
+            // (pointer parking relies on stepping monitor by monitor).
+            E::MouseMove { .. } => out.push(ev),
             other => out.push(other),
         }
     }
@@ -520,6 +516,6 @@ mod tests {
             E::MouseMove { dx: 1.0, dy: 2.0 },
             E::MouseMove { dx: 3.0, dy: -1.0 },
         ]);
-        assert_eq!(rel, vec![E::MouseMove { dx: 4.0, dy: 1.0 }]);
+        assert_eq!(rel.len(), 2, "relative moves are kept in order");
     }
 }

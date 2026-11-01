@@ -560,9 +560,13 @@ impl CaptureBackend for GnomeBackend {
 
     fn release_pointer(&mut self) {
         let _ = self.req_tx.send(Req::ReleaseKeys);
-        // Park the OS pointer in the middle of the laptop display: a huge
-        // up-left motion reaches the top-left corner of the layout, then
-        // half the laptop's logical size.
+        // Park the OS pointer in the middle of the laptop display. Mutter
+        // clamps a relative move whose target is on no monitor to the edge
+        // of the *current* monitor, so one huge jump never leaves the glasses
+        // output. Step by one laptop size at a time instead: up (the glasses
+        // panel sits below the laptop), then left once per monitor, which
+        // always lands on the neighbour and ends at the laptop's top-left
+        // corner; then to its centre.
         let laptop_x = self.laptop_x();
         let (w, h) = self
             .layout
@@ -570,21 +574,19 @@ impl CaptureBackend for GnomeBackend {
             .find(|m| m.x == laptop_x && m.y == 0)
             .map(|m| (m.w, m.h))
             .unwrap_or((2048.0, 1280.0));
-        {
-            let _ = self.req_tx.send(Req::Inject {
-                display: CONTROL_SESSION,
-                events: vec![
-                    InputEvent::MouseMove {
-                        dx: -30000.0,
-                        dy: -30000.0,
-                    },
-                    InputEvent::MouseMove {
-                        dx: w / 2.0,
-                        dy: h / 2.0,
-                    },
-                ],
-            });
+        let mut events = vec![InputEvent::MouseMove { dx: 0.0, dy: -h }];
+        for _ in 0..self.layout.len().max(2) {
+            events.push(InputEvent::MouseMove { dx: -w, dy: 0.0 });
         }
+        events.push(InputEvent::MouseMove { dx: 0.0, dy: -h });
+        events.push(InputEvent::MouseMove {
+            dx: w / 2.0,
+            dy: h / 2.0,
+        });
+        let _ = self.req_tx.send(Req::Inject {
+            display: CONTROL_SESSION,
+            events,
+        });
     }
 
     fn release(&mut self, source: &Source) {
