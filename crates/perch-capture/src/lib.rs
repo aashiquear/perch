@@ -315,6 +315,62 @@ pub fn downscale2x(src: &[u8], w: u32, h: u32, stride: usize) -> (Vec<u8>, u32, 
     (out, ow, oh)
 }
 
+/// A sub-rectangle of a stream: `(x, y, width, height)` in stream pixels.
+pub type Crop = (u32, u32, u32, u32);
+
+/// Bounding box of pixels whose alpha exceeds `threshold`, for a tightly
+/// packed 4-byte-per-pixel image with alpha last (RGBA or BGRA). Window
+/// streams on GNOME are monitor-sized with the window drawn into them, so
+/// this finds the window.
+pub fn opaque_bbox(data: &[u8], w: u32, h: u32, threshold: u8) -> Option<Crop> {
+    let (w, h) = (w as usize, h as usize);
+    let row_opaque = |y: usize| {
+        data[y * w * 4..(y + 1) * w * 4]
+            .iter()
+            .skip(3)
+            .step_by(4)
+            .any(|a| *a > threshold)
+    };
+    let top = (0..h).find(|&y| row_opaque(y))?;
+    let bottom = (top..h).rev().find(|&y| row_opaque(y))?;
+    let col_opaque = |x: usize| (top..=bottom).any(|y| data[(y * w + x) * 4 + 3] > threshold);
+    let left = (0..w).find(|&x| col_opaque(x))?;
+    let right = (left..w).rev().find(|&x| col_opaque(x))?;
+    Some((
+        left as u32,
+        top as u32,
+        (right - left + 1) as u32,
+        (bottom - top + 1) as u32,
+    ))
+}
+
+/// Copy `crop` out of a packed 4-byte-per-pixel image.
+pub fn crop_frame(data: &[u8], stride: usize, crop: Crop) -> Vec<u8> {
+    let (x, y, w, h) = (crop.0 as usize, crop.1 as usize, crop.2 as usize, crop.3 as usize);
+    let mut out = Vec::with_capacity(w * h * 4);
+    for row in y..y + h {
+        out.extend_from_slice(&data[row * stride + x * 4..row * stride + (x + w) * 4]);
+    }
+    out
+}
+
+/// Keep the previous crop while every edge of the new one is within `tol`
+/// pixels of it, so sub-pixel shadow changes don't re-layout the window.
+pub fn stabilise_crop(prev: Option<Crop>, new: Crop, tol: u32) -> Crop {
+    match prev {
+        Some(p) => {
+            let near = |a: u32, b: u32| a.abs_diff(b) <= tol;
+            if near(p.0, new.0) && near(p.1, new.1) && near(p.0 + p.2, new.0 + new.2) && near(p.1 + p.3, new.1 + new.3)
+            {
+                p
+            } else {
+                new
+            }
+        }
+        None => new,
+    }
+}
+
 /// Host monotonic time in µs.
 pub fn now_us() -> u64 {
     use std::sync::OnceLock;
@@ -365,5 +421,24 @@ mod tests {
         let (out, w, h) = downscale2x(&src, 4, 2, 20);
         assert_eq!((w, h), (2, 1));
         assert_eq!(out, vec![15, 15, 15, 255, 150, 150, 150, 255]);
+    }
+
+    #[test]
+    fn opaque_bbox_finds_window_inside_transparent_stream() {
+        // 6x4 transparent image with an opaque 3x2 block at (2,1).
+        let (w, h) = (6u32, 4u32);
+        let mut img = vec![0u8; (w * h * 4) as usize];
+        for y in 1..3 {
+            for x in 2..5 {
+                img[((y * w + x) * 4 + 3) as usize] = 255;
+            }
+        }
+        assert_eq!(opaque_bbox(&img, w, h, 16), Some((2, 1, 3, 2)));
+        assert_eq!(opaque_bbox(&vec![0u8; 16], 2, 2, 16), None);
+        let cropped = crop_frame(&img, (w * 4) as usize, (2, 1, 3, 2));
+        assert_eq!(cropped.len(), 3 * 2 * 4);
+        assert!(cropped.iter().skip(3).step_by(4).all(|a| *a == 255));
+        assert_eq!(stabilise_crop(Some((2, 1, 3, 2)), (3, 1, 3, 2), 1), (2, 1, 3, 2));
+        assert_eq!(stabilise_crop(Some((2, 1, 3, 2)), (6, 1, 3, 2), 1), (6, 1, 3, 2));
     }
 }

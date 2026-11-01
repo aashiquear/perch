@@ -239,7 +239,7 @@ impl RenderApp {
         // Predicted pose for this frame.
         let pose = self.tracker.lock().unwrap().pose_predicted(0.0);
 
-        let (windows, projector, mode, grid, drag_overlay) = {
+        let (windows, projector, mode, grid, drag_overlay, sizes) = {
             let mut e = self.engine.blocking_lock();
             e.set_pose(pose);
             let drag_overlay = self.interact.drag_overlay(&e);
@@ -249,6 +249,7 @@ impl RenderApp {
                 e.display_mode,
                 e.ws.grid,
                 drag_overlay,
+                e.ws.sizes.clone(),
             )
         };
         self.ensure_sources(&windows);
@@ -256,15 +257,37 @@ impl RenderApp {
 
         // Upload new frames; a stream that ended is reopened next frame.
         let mut ended = Vec::new();
+        let mut resized = Vec::new();
         for (id, src) in self.sources.iter_mut() {
             match src.next_frame(std::time::Duration::from_millis(0)) {
-                Ok(Some(f)) => comp.upload(*id, &f),
+                Ok(Some(f)) => {
+                    comp.upload(*id, &f);
+                    // A window stream's visible size is only known from its
+                    // pixels (GNOME streams are monitor-sized); keep the grid
+                    // sized to what is actually shown.
+                    let px = src.size();
+                    let known = sizes.get(id).copied();
+                    let differs = known.is_none_or(|k| k.0.abs_diff(px.0) > 8 || k.1.abs_diff(px.1) > 8);
+                    if px.0 > 0 && px.1 > 0 && differs {
+                        resized.push((*id, px));
+                    }
+                }
                 Ok(None) => {}
                 Err(e) => {
                     tracing::info!(window = %id, "capture ended: {e}");
                     ended.push(*id);
                 }
             }
+        }
+        for (id, (width, height)) in resized {
+            let _ = self
+                .capture
+                .commands
+                .send(crate::capture::UiMsg::Command(perch_proto::Command::SetWindowPixels {
+                    id,
+                    width,
+                    height,
+                }));
         }
         for id in ended {
             self.sources.remove(&id);

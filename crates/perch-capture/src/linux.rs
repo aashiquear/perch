@@ -53,6 +53,9 @@ pub struct PickedStream {
     pub portal_id: Option<String>,
     /// Index of the portal session (for input injection).
     pub session_index: usize,
+    /// Window streams are monitor-sized with the window drawn inside; this
+    /// is the detected window rectangle in stream pixels, once known.
+    pub crop: Arc<Mutex<Option<crate::Crop>>>,
     /// Whether that session is a remote-desktop session (can inject).
     pub remote: bool,
     /// Logical desktop position (monitors only).
@@ -73,7 +76,11 @@ enum PortalReq {
     Inject {
         session: usize,
         node_id: u32,
-        size: (u32, u32),
+        /// Stream rectangle that the window's normalised coordinates span.
+        rect: crate::Crop,
+        /// Divisor from stream pixels to the units Mutter expects (window
+        /// streams: logical surface pixels; monitor streams: stream pixels).
+        scale: f32,
         events: Vec<InputEvent>,
     },
 }
@@ -210,6 +217,7 @@ impl PortalBackend {
                 kind,
                 portal_id,
                 session_index: res.session_index,
+                crop: Default::default(),
                 remote: res.remote,
                 position,
                 session: Arc::clone(&session),
@@ -277,11 +285,30 @@ impl CaptureBackend for PortalBackend {
             return false;
         }
         let Some(size) = s.size else { return false };
+        let is_window = !matches!(s.kind, Some(SourceType::Monitor));
+        let rect = if is_window {
+            s.crop.lock().ok().and_then(|c| *c).unwrap_or((0, 0, size.0, size.1))
+        } else {
+            (0, 0, size.0, size.1)
+        };
+        // Mutter sizes a window stream as its monitor's logical size times
+        // ceil(scale) and maps positions through the window's surface in
+        // logical pixels, so divide by that integer scale.
+        let scale = if is_window {
+            self.layout
+                .iter()
+                .find(|m| (m.w * m.scale.ceil()) as u32 == size.0 && (m.h * m.scale.ceil()) as u32 == size.1)
+                .map(|m| m.scale.ceil())
+                .unwrap_or(1.0)
+        } else {
+            1.0
+        };
         self.req_tx
             .send(PortalReq::Inject {
                 session: s.session_index,
                 node_id: s.node_id,
-                size,
+                rect,
+                scale,
                 events: events.to_vec(),
             })
             .is_ok()
@@ -362,11 +389,12 @@ fn portal_thread(rx: mpsc::Receiver<PortalReq>) {
             PortalReq::Inject {
                 session,
                 node_id,
-                size,
+                rect,
+                scale,
                 events,
             } => {
                 if let Some(LiveSession::Remote { proxy, session, .. }) = live.get(session) {
-                    rt.block_on(inject_events(proxy, session, node_id, size, &events));
+                    rt.block_on(inject_events(proxy, session, node_id, rect, scale, &events));
                 }
             }
             PortalReq::Close { reply } => {
@@ -508,14 +536,16 @@ async fn inject_events(
     rd: &RemoteDesktop<'static>,
     session: &Session<'static, RemoteDesktop<'static>>,
     node_id: u32,
-    size: (u32, u32),
+    rect: crate::Crop,
+    scale: f32,
     events: &[InputEvent],
 ) {
+    let scale = scale.max(1.0);
     for ev in events {
         let res = match *ev {
             InputEvent::MouseMoveAbs { x, y } => {
-                let px = (x.clamp(0.0, 1.0) * size.0 as f32) as f64;
-                let py = (y.clamp(0.0, 1.0) * size.1 as f32) as f64;
+                let px = ((rect.0 as f32 + x.clamp(0.0, 1.0) * rect.2 as f32) / scale) as f64;
+                let py = ((rect.1 as f32 + y.clamp(0.0, 1.0) * rect.3 as f32) / scale) as f64;
                 rd.notify_pointer_motion_absolute(session, node_id, px, py).await
             }
             InputEvent::MouseMove { dx, dy } => rd.notify_pointer_motion(session, dx as f64, dy as f64).await,
@@ -659,6 +689,8 @@ enum PwCmd {
         node_id: u32,
         fps: u32,
         slot: Arc<Slot>,
+        /// Window stream: crop to the opaque window and publish the crop.
+        crop: Option<Arc<Mutex<Option<crate::Crop>>>>,
         reply: mpsc::Sender<Result<u64, String>>,
     },
     Disconnect(u64),
@@ -698,13 +730,20 @@ impl PwSession {
         })
     }
 
-    fn connect(&self, node_id: u32, fps: u32, slot: Arc<Slot>) -> Result<u64, CaptureError> {
+    fn connect(
+        &self,
+        node_id: u32,
+        fps: u32,
+        slot: Arc<Slot>,
+        crop: Option<Arc<Mutex<Option<crate::Crop>>>>,
+    ) -> Result<u64, CaptureError> {
         let (reply, rx) = mpsc::channel();
         self.cmd
             .send(PwCmd::Connect {
                 node_id,
                 fps,
                 slot,
+                crop,
                 reply,
             })
             .map_err(|_| CaptureError::Ended)?;
@@ -747,7 +786,8 @@ impl PipeWireSource {
             }),
             cv: Condvar::new(),
         });
-        let key = stream.session.connect(stream.node_id, fps, Arc::clone(&slot))?;
+        let crop = (!matches!(stream.kind, Some(SourceType::Monitor))).then(|| Arc::clone(&stream.crop));
+        let key = stream.session.connect(stream.node_id, fps, Arc::clone(&slot), crop)?;
         Ok(Self {
             source,
             slot,
@@ -795,6 +835,9 @@ struct UserData {
     slot: Arc<Slot>,
     frames: u64,
     node_id: u32,
+    /// Window streams: where to publish the detected window rectangle.
+    crop_out: Option<Arc<Mutex<Option<crate::Crop>>>>,
+    last_crop: Option<crate::Crop>,
 }
 
 type LiveStream = (pipewire::stream::Stream, pipewire::stream::StreamListener<UserData>);
@@ -828,9 +871,10 @@ fn pw_session_loop(
             node_id,
             fps,
             slot,
+            crop,
             reply,
         } => {
-            let res = connect_stream(&core, node_id, fps, slot).map(|live| {
+            let res = connect_stream(&core, node_id, fps, slot, crop).map(|live| {
                 let key = next_key.get();
                 next_key.set(key + 1);
                 streams2.borrow_mut().insert(key, live);
@@ -857,7 +901,13 @@ fn pw_session_loop(
     Ok(())
 }
 
-fn connect_stream(core: &pipewire::core::Core, node_id: u32, fps: u32, slot: Arc<Slot>) -> Result<LiveStream, String> {
+fn connect_stream(
+    core: &pipewire::core::Core,
+    node_id: u32,
+    fps: u32,
+    slot: Arc<Slot>,
+    crop_out: Option<Arc<Mutex<Option<crate::Crop>>>>,
+) -> Result<LiveStream, String> {
     use pipewire as pw;
     use pw::spa;
     use spa::pod::{Pod, Value};
@@ -876,6 +926,8 @@ fn connect_stream(core: &pipewire::core::Core, node_id: u32, fps: u32, slot: Arc
     let data = UserData {
         format: Default::default(),
         slot,
+        crop_out,
+        last_crop: None,
         frames: 0,
         node_id,
     };
@@ -974,10 +1026,37 @@ fn connect_stream(core: &pipewire::core::Core, node_id: u32, fps: u32, slot: Arc
                 tracing::info!(node_id = ud.node_id, width = w, height = h, "first capture frame");
             }
             ud.frames += 1;
-            let (out, w, h) = if w > crate::MAX_UPLOAD_WIDTH {
-                crate::downscale2x(&out, w, h, row)
+            let (out, w, h, factor) = if w > crate::MAX_UPLOAD_WIDTH {
+                let (o, w2, h2) = crate::downscale2x(&out, w, h, row);
+                (o, w2, h2, 2u32)
             } else {
-                (out, w, h)
+                (out, w, h, 1u32)
+            };
+            let row = (w as usize) * 4;
+            // Window streams are monitor-sized; show just the window.
+            let mut crop_px: Option<crate::Crop> = None;
+            let (out, w, h) = match (&ud.crop_out, opaque) {
+                (Some(crop_out), false) => match crate::opaque_bbox(&out, w, h, 24) {
+                    Some(b) => {
+                        let full = (b.0 * factor, b.1 * factor, b.2 * factor, b.3 * factor);
+                        let full = crate::stabilise_crop(ud.last_crop, full, 3 * factor);
+                        ud.last_crop = Some(full);
+                        if let Ok(mut c) = crop_out.lock() {
+                            *c = Some(full);
+                        }
+                        crop_px = Some(full);
+                        let local = (full.0 / factor, full.1 / factor, full.2 / factor, full.3 / factor);
+                        let local = (
+                            local.0.min(w.saturating_sub(1)),
+                            local.1.min(h.saturating_sub(1)),
+                            local.2.clamp(1, w - local.0.min(w.saturating_sub(1))),
+                            local.3.clamp(1, h - local.1.min(h.saturating_sub(1))),
+                        );
+                        (crate::crop_frame(&out, row, local), local.2, local.3)
+                    }
+                    None => (out, w, h),
+                },
+                _ => (out, w, h),
             };
             let row = (w as usize) * 4;
             let frame = Frame::Rgba {
@@ -989,6 +1068,9 @@ fn connect_stream(core: &pipewire::core::Core, node_id: u32, fps: u32, slot: Arc
                 t_us: now_us(),
             };
             let mut s = ud.slot.m.lock().unwrap();
+            if let Some(c) = crop_px {
+                s.size = (c.2, c.3);
+            }
             s.latest = Some(frame);
             s.seq += 1;
             ud.slot.cv.notify_all();
