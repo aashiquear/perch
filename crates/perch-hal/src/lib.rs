@@ -95,7 +95,8 @@ pub trait Glasses: Send {
 /// Open the first supported real device, falling back to nothing. The daemon
 /// wraps this in a hotplug poll loop (see `perch-daemon::hotplug`).
 pub fn open_any() -> Result<Box<dyn Glasses>> {
-    #[cfg(feature = "rokid")]
+    // Android has no bus to scan: the app hands us a USB fd (`open_fd`).
+    #[cfg(all(feature = "rokid", not(target_os = "android")))]
     {
         match rokid::RokidGlasses::open() {
             Ok(g) => return Ok(Box::new(g)),

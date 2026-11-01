@@ -12,6 +12,15 @@
     <uses-permission android:name="android.permission.VIBRATE" />
     <!-- mDNS discovery of perchd hosts -->
     <uses-permission android:name="android.permission.CHANGE_WIFI_MULTICAST_STATE" />
+    <!-- Shizuku: privileged helper for multi-app glasses displays -->
+    <uses-permission android:name="moe.shizuku.manager.permission.API_V23" />
+    <!-- The app picker lists launchable apps -->
+    <queries>
+        <intent>
+            <action android:name="android.intent.action.MAIN" />
+            <category android:name="android.intent.category.LAUNCHER" />
+        </intent>
+    </queries>
 
     <application
         android:name=".PerchApp"
@@ -38,6 +47,14 @@
                 android:name="android.hardware.usb.action.USB_DEVICE_ATTACHED"
                 android:resource="@xml/device_filter" />
         </activity>
+
+        <provider
+            android:name="rikka.shizuku.ShizukuProvider"
+            android:authorities="${applicationId}.shizuku"
+            android:multiprocess="false"
+            android:enabled="true"
+            android:exported="true"
+            android:permission="android.permission.INTERACT_ACROSS_USERS_FULL" />
 
         <!-- Keeps USB + tracking + Presentation alive while the phone is pocketed. -->
         <service

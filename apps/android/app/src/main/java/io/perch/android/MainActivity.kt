@@ -1,18 +1,18 @@
 package io.perch.android
 
 import android.app.Application
-import android.content.Intent
 import android.os.Build
 import android.os.Bundle
-import android.provider.Settings
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
@@ -21,6 +21,8 @@ import io.perch.android.host.GlassesService
 import io.perch.android.host.MirrorSource
 import io.perch.android.touchpad.PerchClient
 import io.perch.android.touchpad.TouchpadSurface
+import io.perch.android.shell.ShellBridge
+import io.perch.android.ui.PanelScreen
 import io.perch.android.ui.PerchTheme
 
 class PerchApp : Application()
@@ -49,6 +51,7 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         if (Build.VERSION.SDK_INT >= 33) requestPermissions(arrayOf(android.Manifest.permission.POST_NOTIFICATIONS), 1)
+        ShellBridge.install()
         setContent {
             PerchTheme {
                 var tab by rememberSaveable { mutableIntStateOf(0) }
@@ -70,37 +73,8 @@ class MainActivity : ComponentActivity() {
 
     @Composable
     private fun HostScreen() {
-        val status by GlassesService.status.collectAsStateWithLifecycle()
-        val hz by GlassesService.imuHz.collectAsStateWithLifecycle()
-        val cal by GlassesService.calibrationState.collectAsStateWithLifecycle()
-        val pose by GlassesService.pose.collectAsStateWithLifecycle()
-        Column(Modifier.fillMaxSize().padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            Text("Glasses host", style = MaterialTheme.typography.headlineSmall)
-            Text(status); Text("IMU $hz Hz · calibration ${calLabel(cal)}")
-            Text("q = [%.2f %.2f %.2f %.2f]".format(pose[0], pose[1], pose[2], pose[3]), style = MaterialTheme.typography.bodySmall)
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Button({ GlassesService.start(this@MainActivity) }) { Text("Start") }
-                OutlinedButton({ GlassesService.start(this@MainActivity, useMock = true) }) { Text("Start (mock)") }
-                OutlinedButton({ GlassesService.stop(this@MainActivity) }) { Text("Stop") }
-            }
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Button({ GlassesService.recenter() }) { Text("Recenter") }
-                OutlinedButton({ GlassesService.calibrate(20f) }) { Text("Calibrate (20 s, still)") }
-            }
-            HorizontalDivider()
-            Text("Windows", style = MaterialTheme.typography.titleMedium)
-            Button({ projectionLauncher.launch(MirrorSource.requestIntent(this@MainActivity)) }) { Text("Add: mirror this phone's screen") }
-            Text("DeX: enable Developer options → \"Force desktop mode\" and Perch will offer each app as its own window. See Settings help.", style = MaterialTheme.typography.bodySmall)
-            HorizontalDivider()
-            Text("Let Perch control this phone from the glasses", style = MaterialTheme.typography.titleMedium)
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedButton({ startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)) }) { Text("Accessibility") }
-                OutlinedButton({ startActivity(Intent(Settings.ACTION_INPUT_METHOD_SETTINGS)) }) { Text("Enable keyboard") }
-            }
-        }
+        PanelScreen(this) { projectionLauncher.launch(MirrorSource.requestIntent(this@MainActivity)) }
     }
-
-    private fun calLabel(c: Int) = when { c == 0 -> "none"; c == 200 -> "ready"; else -> "$c%" }
 
     @Composable
     private fun TouchpadScreen(client: PerchClient) {
@@ -152,7 +126,6 @@ class MainActivity : ComponentActivity() {
     }
 }
 
-private fun Modifier.clickable(onClick: () -> Unit): Modifier = androidx.compose.foundation.clickable(this, onClick = onClick)
 
 @Composable
 private fun RemoteKeyboardBar(client: PerchClient) {

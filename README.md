@@ -15,8 +15,9 @@ world-pinned windows. Perch does the same thing on your own machines:
      machine owns the focused window
 ```
 
-Primary use: regular laptop coding, design work, and gaming while wearing the
-glasses, with several windows pinned around you instead of one bobbing mirror.
+Primary use: regular laptop coding, design work, watching and gaming while
+wearing the glasses, with several windows pinned around you instead of one
+bobbing mirror. Step-by-step recipes for each: [docs/USE-CASES.md](docs/USE-CASES.md).
 
 ## Status: v0.1.0 — Linux works end to end on GNOME; other hosts staged
 
@@ -32,7 +33,7 @@ glasses, with several windows pinned around you instead of one bobbing mirror.
 | Portal/PipeWire capture (other Wayland compositors) | **done; input via the RemoteDesktop portal** |
 | Keyboard/trackpad grab (evdev, touchpad gestures) + uinput fallback (`perch-input`) | **done, on device** |
 | Daemon `perchd` with on-glasses control bar and desktop dashboard; CLI `perch` | **done** |
-| Android host app (USB IMU, GL presentation, mirror window) + touchpad | written, not yet built on a device |
+| Android host app: panel, apps as glasses displays via Shizuku, pop-up touchpad ([docs/ANDROID.md](docs/ANDROID.md)) | **debug APK builds; on-device test pending** |
 | iPad touchpad app (SwiftUI) | written, not yet built |
 | Windows / macOS daemons | shared Rust core; backends → M4 |
 

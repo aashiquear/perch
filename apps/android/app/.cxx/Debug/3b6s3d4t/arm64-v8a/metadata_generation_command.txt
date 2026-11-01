@@ -1,0 +1,19 @@
+                        -H/mnt/extended/projects/perch/apps/android/app/src/main/cpp
+-DCMAKE_SYSTEM_NAME=Android
+-DCMAKE_EXPORT_COMPILE_COMMANDS=ON
+-DCMAKE_SYSTEM_VERSION=29
+-DANDROID_PLATFORM=android-29
+-DANDROID_ABI=arm64-v8a
+-DCMAKE_ANDROID_ARCH_ABI=arm64-v8a
+-DANDROID_NDK=/home/aashiquear/Android/Sdk/ndk/27.0.12077973
+-DCMAKE_ANDROID_NDK=/home/aashiquear/Android/Sdk/ndk/27.0.12077973
+-DCMAKE_TOOLCHAIN_FILE=/home/aashiquear/Android/Sdk/ndk/27.0.12077973/build/cmake/android.toolchain.cmake
+-DCMAKE_MAKE_PROGRAM=/home/aashiquear/Android/Sdk/cmake/3.22.1/bin/ninja
+-DCMAKE_LIBRARY_OUTPUT_DIRECTORY=/mnt/extended/projects/perch/apps/android/app/build/intermediates/cxx/Debug/3b6s3d4t/obj/arm64-v8a
+-DCMAKE_RUNTIME_OUTPUT_DIRECTORY=/mnt/extended/projects/perch/apps/android/app/build/intermediates/cxx/Debug/3b6s3d4t/obj/arm64-v8a
+-DCMAKE_BUILD_TYPE=Debug
+-B/mnt/extended/projects/perch/apps/android/app/.cxx/Debug/3b6s3d4t/arm64-v8a
+-GNinja
+-DANDROID_STL=c++_shared
+                        Build command args: []
+                        Version: 2

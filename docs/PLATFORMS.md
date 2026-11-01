@@ -65,32 +65,24 @@ and use Perch only for side windows (M3: passthrough/exclusive mode).
 
 Two very different ways to use the phone:
 
-### A. Phone as host (Perch owns the glasses)
+### A. Phone as host (Perch owns the glasses) — see docs/ANDROID.md
 `GlassesService` opens the Rokid USB interface (permission prompt once;
-auto-launch via `device_filter.xml`), runs the tracker at 1 kHz, and shows a
-`Presentation` on the external display with the GL renderer.
+auto-launch via `device_filter.xml`), runs the tracker on a dedicated thread,
+and shows a `Presentation` on the external display with the GL renderer.
 
-Windows you can add today:
-- **Mirror of the phone screen** (MediaProjection) — the "phone as floating
-  window" case. Works everywhere.
-- **Own-app displays** (`AppDisplaySource`): a VirtualDisplay you launch
-  activities into. Stock Android only allows *your own* activities on a
-  non-trusted virtual display.
-
-To get **arbitrary apps as separate windows** (true multi-window), you need
-one of:
-1. **DeX "Force desktop mode"** (Developer options) + Shizuku to grant
-   `INTERNAL_SYSTEM_WINDOW`; then `ActivityOptions.setLaunchDisplayId` works
-   for other apps. Recommended on Samsung.
-2. `adb shell settings put global force_desktop_mode_on_external_displays 1`
-   and `enable_freeform_support 1` — the external display becomes a freeform
-   desktop; Perch then captures it as one window (not per-app).
-3. Root.
+The phone screen is the **panel** (`ui/PanelScreen.kt`): the Android twin
+of the Linux dashboard. "Add app" opens any launcher app on its own
+glasses display; each display is a *trusted* virtual display created by
+`shell/PerchShellService.kt`, which Shizuku runs as uid shell (the scrcpy
+`--new-display` mechanism), so stock Android's "only your own activities on
+a virtual display" rule does not apply. Portrait ⇄ landscape per window
+(`VirtualDisplay.resize`), a pop-up touchpad moves a cursor drawn by the
+renderer and injects touch/scroll into that display, Back/Home/Recents keys
+likewise. Without Shizuku: the MediaProjection mirror window only.
 
 **DeX conflict:** when you plug the glasses in, Samsung may start DeX on
-them. Either turn off "Auto start DeX when HDMI/DP connected", or use mode B
-below and let DeX be the desktop (no 3DOF on Samsung's compositor; that is a
-Samsung limitation — DeX draws directly to the display).
+them. Turn off "Auto start DeX when HDMI/DP connected"; DeX draws directly
+to the display and Perch cannot composite it (Samsung limitation).
 
 ### B. Phone as DeX desktop + laptop as host
 Run DeX on the glasses *through the laptop*: Samsung DeX for PC is

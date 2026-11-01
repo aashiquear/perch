@@ -63,7 +63,11 @@ class GlassesService : Service() {
         fun recenter() { if (tracker != 0L) PerchNative.trackerRecenter(tracker) }
         @Volatile private var instance: GlassesService? = null
         /** Add a phone-screen mirror window at the current gaze (called after the MediaProjection prompt). */
-        fun addMirror(src: MirrorSource) { instance?.addWindow(src, PerchNative.SOURCE_PHONE, 1080, 2340, 0.55f, 1.2f) }
+        fun addMirror(src: MirrorSource) { instance?.addWindow(src, PerchNative.SOURCE_PHONE, 1080, 2340, 0.55f, 1.2f) {} }
+        /** The glasses presentation, once the external display is up. */
+        val presentation: GlassesPresentation? get() = instance?.presentation
+        /** True while the glasses display is attached. */
+        val glassesAttached: MutableStateFlow<Boolean> = MutableStateFlow(false)
         fun calibrate(seconds: Float = 20f) { if (tracker != 0L) PerchNative.trackerCalibrate(tracker, seconds) }
     }
 
@@ -204,8 +208,10 @@ class GlassesService : Service() {
             if (ext != null && presentation == null) {
                 Log.i(TAG, "presenting on ${ext.name} ${ext.mode.physicalWidth}x${ext.mode.physicalHeight}")
                 presentation = GlassesPresentation(this, ext).also { it.show() }
+                glassesAttached.value = true
             } else if (ext == null && presentation != null) {
                 presentation?.dismiss(); presentation = null
+                glassesAttached.value = false
             }
         }
         displayListener = object : DisplayManager.DisplayListener {
@@ -226,15 +232,16 @@ class GlassesService : Service() {
     private val sources = ArrayList<WindowSource>()
 
     /** Create a spatial window dead ahead and start `src` drawing into it. */
-    fun addWindow(src: WindowSource, kind: Int, w: Int, h: Int, widthM: Float, heightM: Float) {
+    fun addWindow(src: WindowSource, kind: Int, w: Int, h: Int, widthM: Float, heightM: Float, onIndex: (Int) -> Unit) {
         val p = presentation ?: run { status.value = "no glasses display yet"; return }
-        p.addWindow(kind, w, h, 0f, 0f, 2f, widthM, heightM, PerchNative.ANCHOR_WORLD) { surface ->
-            src.start(surface, w, h); sources += src
+        p.addWindow(kind, w, h, 0f, 0f, 2f, widthM, heightM, PerchNative.ANCHOR_WORLD) { index, surface ->
+            src.start(surface, w, h); sources += src; onIndex(index)
         }
     }
 
     override fun onDestroy() {
         instance = null
+        AppWindows.releaseAll()
         sources.forEach { it.stop() }
         stopImu("stopped")
         presentation?.dismiss()

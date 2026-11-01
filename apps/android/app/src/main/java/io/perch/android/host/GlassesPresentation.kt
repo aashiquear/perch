@@ -37,10 +37,21 @@ class GlassesPresentation(ctx: Context, display: Display) : Presentation(ctx, di
         setContentView(glView)
     }
 
-    /** Add a window; returns a Surface the source should draw into. */
-    fun addWindow(kind: Int, w: Int, h: Int, yaw: Float, pitch: Float, distance: Float, widthM: Float, heightM: Float, anchor: Int, cb: (Surface) -> Unit) {
-        glView.queueEvent { cb(renderer.addWindow(kind, w, h, yaw, pitch, distance, widthM, heightM, anchor)) }
+    /** Add a window; the callback gets the layer index and a Surface the source should draw into. */
+    fun addWindow(kind: Int, w: Int, h: Int, yaw: Float, pitch: Float, distance: Float, widthM: Float, heightM: Float, anchor: Int, cb: (Int, Surface) -> Unit) {
+        glView.queueEvent { val (i, s) = renderer.addWindow(kind, w, h, yaw, pitch, distance, widthM, heightM, anchor); cb(i, s) }
     }
+
+    /** Hide a window (its layer index stays valid). */
+    fun hideWindow(index: Int) = glView.queueEvent { renderer.setHidden(index, true) }
+
+    /** Change a window's source pixel size (portrait ⇄ landscape) and its metres accordingly. */
+    fun resizeWindow(index: Int, w: Int, h: Int, widthM: Float, heightM: Float) =
+        glView.queueEvent { renderer.resizeWindow(index, w, h, widthM, heightM) }
+
+    /** Cursor: which window and where in it (0..1), or null to hide. */
+    fun setCursor(index: Int?, u: Float, v: Float) = renderer.setCursor(index, u, v)
+    fun pinHere(index: Int) = glView.queueEvent { renderer.pinHere(index) }
 
     override fun onStop() {
         super.onStop()
@@ -51,12 +62,24 @@ class GlassesPresentation(ctx: Context, display: Display) : Presentation(ctx, di
 /** One spatial window's GL-side state. */
 private class Layer(val index: Int, val texId: Int, val surfaceTexture: SurfaceTexture, val surface: Surface) {
     @Volatile var dirty = false
+    @Volatile var hidden = false
+    @Volatile var yaw = 0f
+    @Volatile var pitch = 0f
+    @Volatile var distance = 2f
+    @Volatile var anchor = 0
+    @Volatile var kind = 0
 }
 
 class SpatialRenderer(private val panelW: Int, private val panelH: Int) : GLSurfaceView.Renderer {
     private var space = 0L
     private val layers = ArrayList<Layer>()
     private var program = 0
+    private var solidProgram = 0
+    private var sPos = 0
+    private var sColor = 0
+    @Volatile private var cursorIndex: Int? = null
+    @Volatile private var cursorU = 0.5f
+    @Volatile private var cursorV = 0.5f
     private var aPos = 0
     private var aUv = 0
     private var uTex = 0
@@ -73,6 +96,9 @@ class SpatialRenderer(private val panelW: Int, private val panelH: Int) : GLSurf
     override fun onSurfaceCreated(gl: GL10?, config: EGLConfig?) {
         space = PerchNative.spaceNew(panelW, panelH, fovH, tilt)
         program = buildProgram()
+        solidProgram = buildSolidProgram()
+        sPos = GLES20.glGetAttribLocation(solidProgram, "aPos")
+        sColor = GLES20.glGetUniformLocation(solidProgram, "uColor")
         aPos = GLES20.glGetAttribLocation(program, "aPosW")
         aUv = GLES20.glGetAttribLocation(program, "aUv")
         uTex = GLES20.glGetUniformLocation(program, "uTex")
@@ -84,7 +110,7 @@ class SpatialRenderer(private val panelW: Int, private val panelH: Int) : GLSurf
 
     override fun onSurfaceChanged(gl: GL10?, width: Int, height: Int) = GLES20.glViewport(0, 0, width, height)
 
-    fun addWindow(kind: Int, w: Int, h: Int, yaw: Float, pitch: Float, distance: Float, widthM: Float, heightM: Float, anchor: Int): Surface {
+    fun addWindow(kind: Int, w: Int, h: Int, yaw: Float, pitch: Float, distance: Float, widthM: Float, heightM: Float, anchor: Int): Pair<Int, Surface> {
         val ids = IntArray(1)
         GLES20.glGenTextures(1, ids, 0)
         GLES20.glBindTexture(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, ids[0])
@@ -92,13 +118,27 @@ class SpatialRenderer(private val panelW: Int, private val panelH: Int) : GLSurf
         GLES20.glTexParameteri(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, GLES20.GL_TEXTURE_MAG_FILTER, GLES20.GL_LINEAR)
         val st = SurfaceTexture(ids[0]).also { it.setDefaultBufferSize(w, h) }
         val index = PerchNative.spaceUpsert(space, -1, kind, w, h, yaw, pitch, distance, widthM, heightM, anchor)
-        val layer = Layer(index, ids[0], st, Surface(st))
+        val layer = Layer(index, ids[0], st, Surface(st)).also {
+            it.yaw = yaw; it.pitch = pitch; it.distance = distance; it.anchor = anchor; it.kind = kind
+        }
         st.setOnFrameAvailableListener { layer.dirty = true }
         layers.add(layer)
-        return layer.surface
+        return index to layer.surface
     }
 
     fun pinHere(index: Int) = PerchNative.spacePinHere(space, index)
+
+    fun setHidden(index: Int, hidden: Boolean) {
+        layers.firstOrNull { it.index == index }?.hidden = hidden
+    }
+
+    fun resizeWindow(index: Int, w: Int, h: Int, widthM: Float, heightM: Float) {
+        val l = layers.firstOrNull { it.index == index } ?: return
+        l.surfaceTexture.setDefaultBufferSize(w, h)
+        PerchNative.spaceUpsert(space, index, l.kind, w, h, l.yaw, l.pitch, l.distance, widthM, heightM, l.anchor)
+    }
+
+    fun setCursor(index: Int?, u: Float, v: Float) { cursorIndex = index; cursorU = u; cursorV = v }
 
     override fun onDrawFrame(gl: GL10?) {
         val now = System.nanoTime()
@@ -113,10 +153,21 @@ class SpatialRenderer(private val panelW: Int, private val panelH: Int) : GLSurf
 
         GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT)
         GLES20.glUseProgram(program)
+        var cursorPx: FloatArray? = null
         for (layer in layers) {
             if (layer.dirty) { layer.surfaceTexture.updateTexImage(); layer.dirty = false }
+            if (layer.hidden) continue
             val vis = PerchNative.spaceProject(space, layer.index, dt, corners, homog)
             if (vis < 0) continue
+            if (layer.index == cursorIndex) {
+                // Cursor through the same homography: p = H · (u, v, 1).
+                val u = cursorU; val v = cursorV
+                val w = homog[6] * u + homog[7] * v + homog[8]
+                if (w > 1e-4f) cursorPx = floatArrayOf(
+                    (homog[0] * u + homog[1] * v + homog[2]) / w,
+                    (homog[3] * u + homog[4] * v + homog[5]) / w,
+                )
+            }
             fillQuad()
             GLES20.glActiveTexture(GLES20.GL_TEXTURE0)
             GLES20.glBindTexture(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, layer.texId)
@@ -130,6 +181,42 @@ class SpatialRenderer(private val panelW: Int, private val panelH: Int) : GLSurf
             GLES20.glEnableVertexAttribArray(aUv)
             GLES20.glDrawArrays(GLES20.GL_TRIANGLES, 0, 6)
         }
+        cursorPx?.let { drawCursor(it[0], it[1]) }
+    }
+
+    /** A small arrow pointer with a dark outline, drawn in panel pixels. */
+    private fun drawCursor(x: Float, y: Float) {
+        GLES20.glUseProgram(solidProgram)
+        fun tri(pts: FloatArray, r: Float, g: Float, b: Float) {
+            verts.position(0)
+            for (i in 0 until pts.size / 2) {
+                verts.put(pts[i * 2] / panelW * 2f - 1f).put(1f - pts[i * 2 + 1] / panelH * 2f).put(1f).put(0f).put(0f)
+            }
+            verts.position(0)
+            GLES20.glVertexAttribPointer(sPos, 3, GLES20.GL_FLOAT, false, 20, verts)
+            GLES20.glEnableVertexAttribArray(sPos)
+            GLES20.glUniform4f(sColor, r, g, b, 1f)
+            GLES20.glDrawArrays(GLES20.GL_TRIANGLES, 0, pts.size / 2)
+        }
+        val s = 18f
+        val arrow = floatArrayOf(x, y, x, y + s * 1.4f, x + s, y + s)
+        tri(floatArrayOf(x - 2f, y - 3f, x - 2f, y + s * 1.4f + 4f, x + s + 4f, y + s + 1f), 0.05f, 0.05f, 0.08f)
+        tri(arrow, 1f, 1f, 1f)
+    }
+
+    private fun buildSolidProgram(): Int {
+        val vs = "attribute vec3 aPos; void main() { gl_Position = vec4(aPos.x, aPos.y, 0.0, 1.0); }"
+        val fs = "precision mediump float; uniform vec4 uColor; void main() { gl_FragColor = uColor; }"
+        fun compile(type: Int, src: String): Int {
+            val sh = GLES20.glCreateShader(type)
+            GLES20.glShaderSource(sh, src); GLES20.glCompileShader(sh)
+            return sh
+        }
+        val p = GLES20.glCreateProgram()
+        GLES20.glAttachShader(p, compile(GLES20.GL_VERTEX_SHADER, vs))
+        GLES20.glAttachShader(p, compile(GLES20.GL_FRAGMENT_SHADER, fs))
+        GLES20.glLinkProgram(p)
+        return p
     }
 
     /** Same math as perch-compositor::quad_to_vertices. */

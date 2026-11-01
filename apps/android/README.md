@@ -29,14 +29,28 @@ Unit tests: `./gradlew testDebugUnitTest` (postcard byte parity with Rust).
 
 ## First run (host mode)
 
-1. Plug in the glasses, accept the USB permission prompt.
-2. Tap **Start**. Status shows `tracking Rokid Max`, IMU ≈ 1000 Hz.
+1. Install [Shizuku](https://shizuku.rikka.app) and start it (Wireless
+   debugging; pair once). Perch needs it to open *other* apps on glasses
+   displays — see `docs/ANDROID.md` for why.
+2. Open Perch; on the Shizuku card tap to allow. Plug in the glasses, accept
+   the USB prompt, **Start**. Status shows `tracking Rokid Max`.
 3. **Calibrate** with the glasses on a table (20 s). Saved to app storage.
-4. **Add: mirror this phone's screen** → accept the capture prompt → the
-   phone screen floats dead ahead. Pocket the phone; use a Bluetooth keyboard.
-5. For other apps as windows and DeX integration see `docs/PLATFORMS.md`.
+4. **Add app** → pick an app (portrait or landscape) → it opens on its own
+   display in the glasses, straight ahead. Add more; tap a card to focus.
+5. **Touchpad** → move the cursor in the focused window; tap, scroll,
+   3-finger swipe to switch windows. ⟳ flips portrait/landscape, ✕ closes.
+6. No Shizuku? **Mirror phone screen** still gives one floating window.
+
+## Build on this machine without Android Studio
+
+```bash
+export JAVA_HOME=~/.local/share/perch-toolchain/jdk21 ANDROID_HOME=~/Android/Sdk
+~/.local/share/perch-toolchain/gradle-8.11.1/bin/gradle assembleDebug
+adb install -r app/build/outputs/apk/debug/app-debug.apk
+```
 
 ## Permissions
+
 
 USB host (runtime prompt), notifications (foreground service), screen capture
 (MediaProjection prompt), and — only if you want the laptop to control this
