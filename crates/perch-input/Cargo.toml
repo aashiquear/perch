@@ -1,0 +1,27 @@
+[package]
+name = "perch-input"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Seamless keyboard/mouse sharing across peers: routing by focused spatial window, edge switching, platform injection backends"
+
+[features]
+default = []
+# Linux: inject via /dev/uinput, capture via evdev grab.
+linux-evdev = ["dep:evdev"]
+# Windows: SendInput + low-level hooks (scaffold).
+windows = []
+# macOS: CGEvent + CGEventTap (scaffold).
+macos = []
+
+[dependencies]
+perch-proto.workspace = true
+perch-space.workspace = true
+nalgebra.workspace = true
+serde.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+uuid.workspace = true
+
+[target.'cfg(target_os = "linux")'.dependencies]
+evdev = { version = "0.13", optional = true }

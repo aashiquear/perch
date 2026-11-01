@@ -1,0 +1,23 @@
+[package]
+name = "perch-ffi"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "C ABI over perch-tracking / perch-space / perch-hal for the Android host app (JNI) and the iPad controller (Swift)"
+
+[lib]
+name = "perch_ffi"
+crate-type = ["cdylib", "staticlib", "rlib"]
+
+[features]
+default = []
+rokid = ["perch-hal/rokid"]
+
+[dependencies]
+perch-proto.workspace = true
+perch-tracking.workspace = true
+perch-space.workspace = true
+perch-hal.workspace = true
+nalgebra.workspace = true
+serde_json.workspace = true
+uuid.workspace = true

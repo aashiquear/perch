@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Rokid Air / Max IMU interface. VID 0x04d2 (1234), PID 0x162f (5679). -->
+<resources>
+    <usb-device vendor-id="1234" product-id="5679" />
+</resources>

@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Perch</string>
+    <string name="ime_name">Perch remote keyboard</string>
+    <string name="a11y_description">Lets Perch move the pointer and tap on your behalf when you control this phone from your glasses setup. Perch never reads screen content.</string>
+    <string name="notif_channel">Perch glasses</string>
+</resources>

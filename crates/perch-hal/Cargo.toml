@@ -1,0 +1,24 @@
+[package]
+name = "perch-hal"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Hardware abstraction for XR glasses: detection, IMU stream, display mode, brightness. Rokid Max via ar-drivers; mock replay backend for tests."
+
+[features]
+default = ["mock"]
+# Real Rokid Air/Max backend over libusb (vendored build so no system libusb needed).
+rokid = ["dep:ar-drivers", "dep:rusb"]
+# Replay recorded IMU logs; no hardware required.
+mock = []
+
+[dependencies]
+perch-proto.workspace = true
+perch-tracking.workspace = true
+nalgebra.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+ar-drivers = { workspace = true, optional = true }
+rusb = { workspace = true, optional = true }

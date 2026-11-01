@@ -1,0 +1,43 @@
+[package]
+name = "perch-daemon"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "perchd — the Perch host daemon: glasses hotplug, tracking, spatial window engine, control server, compositor"
+
+[[bin]]
+name = "perchd"
+path = "src/main.rs"
+
+[features]
+# Headless by default so `cargo build` works on CI and on machines without a GPU.
+default = []
+# Real Rokid hardware.
+rokid = ["perch-hal/rokid"]
+# Open a window on the glasses and draw (needs a GPU + display server).
+render = ["dep:perch-compositor", "dep:perch-capture", "dep:winit"]
+# Linux keyboard/mouse injection + capture.
+linux-input = ["perch-input/linux-evdev"]
+full-linux = ["rokid", "render", "linux-input"]
+
+[dependencies]
+perch-proto.workspace = true
+perch-tracking.workspace = true
+perch-space.workspace = true
+perch-hal.workspace = true
+perch-net.workspace = true
+perch-input.workspace = true
+perch-compositor = { workspace = true, optional = true }
+perch-capture = { workspace = true, optional = true }
+winit = { workspace = true, optional = true }
+tokio.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+toml.workspace = true
+directories.workspace = true
+clap.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+anyhow.workspace = true
+uuid.workspace = true
+nalgebra.workspace = true

@@ -1,0 +1,120 @@
+//! `perchd` — Perch host daemon.
+//!
+//! ```text
+//! perchd                      # real glasses, headless unless built with --features render
+//! perchd --mock synthetic     # no hardware: synthetic IMU
+//! perchd --mock rec.jsonl     # replay a recording from `perch record`
+//! perchd --config-dir ./dev   # keep state out of ~/.config while hacking
+//! ```
+
+mod config;
+mod device;
+mod engine;
+#[cfg(feature = "render")]
+mod render;
+mod server;
+
+use clap::Parser;
+use config::Paths;
+use perch_space::DisplayOptics;
+use std::path::PathBuf;
+use std::sync::Arc;
+use tokio::sync::Mutex;
+
+#[derive(Parser, Debug)]
+#[command(name = "perchd", version, about = "Perch host daemon")]
+struct Args {
+    /// Config/state directory (default: XDG config dir).
+    #[arg(long)]
+    config_dir: Option<PathBuf>,
+    /// Use a mock device: `synthetic` or a path to a JSON-lines recording.
+    #[arg(long)]
+    mock: Option<String>,
+    /// Don't open a render window even if built with `render`.
+    #[arg(long)]
+    headless: bool,
+    /// Log filter (RUST_LOG syntax).
+    #[arg(long, default_value = "info")]
+    log: String,
+}
+
+fn main() -> anyhow::Result<()> {
+    let args = Args::parse();
+    tracing_subscriber::fmt()
+        .with_env_filter(tracing_subscriber::EnvFilter::try_new(&args.log).unwrap_or_else(|_| "info".into()))
+        .init();
+
+    let paths = args
+        .config_dir
+        .clone()
+        .map(Paths::at)
+        .unwrap_or_else(Paths::default_paths);
+    let cfg = paths.load_config()?;
+    tracing::info!(name = %cfg.name, peer = %cfg.peer_id, dir = %paths.dir.display(), "perchd starting");
+
+    let optics = DisplayOptics {
+        fov_h: cfg.display.fov_h_deg.to_radians(),
+        tilt: cfg.display.tilt_deg.to_radians(),
+        ..if cfg.display.mode.contains("1200") {
+            DisplayOptics::rokid_max_1200p()
+        } else {
+            DisplayOptics::rokid_max_1080p()
+        }
+    };
+
+    let source = match args.mock.as_deref() {
+        None => device::DeviceSource::Hardware,
+        Some("synthetic") => device::DeviceSource::Mock(Box::new(|| {
+            Box::new(perch_hal::mock::MockGlasses::synthetic(2.0, 3600.0, 0.0).realtime(true))
+        })),
+        Some(path) => {
+            let text = std::fs::read_to_string(path)?;
+            device::DeviceSource::Mock(Box::new(move || {
+                Box::new(perch_hal::mock::MockGlasses::from_jsonl(&text, true).expect("valid recording"))
+            }))
+        }
+    };
+
+    let engine = Arc::new(Mutex::new(engine::Engine::new(
+        server::self_hello(&cfg),
+        optics,
+        Some(paths.clone()),
+    )));
+    let dev = device::spawn(cfg.clone(), Some(paths.clone()), source);
+
+    let local_sink: server::LocalSink = {
+        #[cfg(all(target_os = "linux", feature = "linux-input"))]
+        {
+            match perch_input::linux::UinputSink::new((1920.0, 1080.0)) {
+                Ok(s) => Some(Box::new(s)),
+                Err(e) => {
+                    tracing::warn!("local input injection unavailable: {e}");
+                    None
+                }
+            }
+        }
+        #[cfg(not(all(target_os = "linux", feature = "linux-input")))]
+        {
+            None
+        }
+    };
+
+    let rt = tokio::runtime::Builder::new_multi_thread().enable_all().build()?;
+
+    #[cfg(feature = "render")]
+    if !args.headless {
+        // Networking on the runtime thread; winit on the main thread.
+        let eng2 = Arc::clone(&engine);
+        let tracker = Arc::clone(&dev.tracker);
+        let cfg2 = cfg.clone();
+        std::thread::spawn(move || {
+            if let Err(e) = rt.block_on(server::run(cfg2, eng2, dev, local_sink)) {
+                tracing::error!("server: {e}");
+            }
+            std::process::exit(0);
+        });
+        return render::RenderApp::new(engine, tracker, cfg.display.monitor_name.clone(), cfg.display.ipd_m).run();
+    }
+
+    rt.block_on(server::run(cfg, engine, dev, local_sink))
+}

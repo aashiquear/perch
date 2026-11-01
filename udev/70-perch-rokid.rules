@@ -1,0 +1,2 @@
+# Rokid Air / Max sensor interface — let logged-in users open it without sudo.
+SUBSYSTEM=="usb", ATTR{idVendor}=="04d2", ATTR{idProduct}=="162f", MODE="0660", GROUP="plugdev", TAG+="uaccess"

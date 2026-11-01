@@ -1,0 +1,18 @@
+[package]
+name = "perch-net"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Discovery (mDNS), control channel (WebSocket/JSON) and stream channel (UDP/postcard) for Perch peers"
+
+[dependencies]
+perch-proto.workspace = true
+tokio.workspace = true
+tokio-tungstenite.workspace = true
+futures-util.workspace = true
+mdns-sd.workspace = true
+serde_json.workspace = true
+uuid.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+anyhow.workspace = true

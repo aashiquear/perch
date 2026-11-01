@@ -1,0 +1,19 @@
+[package]
+name = "perch-compositor"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "wgpu renderer that draws captured frames onto 3DOF-projected quads on the glasses display (mono or SBS stereo)"
+
+[dependencies]
+perch-proto.workspace = true
+perch-space.workspace = true
+perch-capture.workspace = true
+nalgebra.workspace = true
+wgpu.workspace = true
+winit.workspace = true
+bytemuck.workspace = true
+pollster.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+uuid.workspace = true

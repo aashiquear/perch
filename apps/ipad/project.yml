@@ -1,0 +1,31 @@
+# XcodeGen spec — `brew install xcodegen && xcodegen generate` produces Perch.xcodeproj.
+# Kept as YAML so the project is reviewable in git.
+name: Perch
+options:
+  bundleIdPrefix: io.perch
+  deploymentTarget:
+    iOS: "16.0"
+  xcodeVersion: "15.0"
+settings:
+  base:
+    SWIFT_VERSION: "5.9"
+    TARGETED_DEVICE_FAMILY: "1,2"      # iPhone + iPad
+    INFOPLIST_KEY_UIApplicationSceneManifest_Generation: YES
+    INFOPLIST_KEY_UILaunchScreen_Generation: YES
+    INFOPLIST_KEY_NSLocalNetworkUsageDescription: "Perch finds and controls perchd hosts on your local network."
+    INFOPLIST_KEY_NSBonjourServices: "_perch._tcp"
+targets:
+  Perch:
+    type: application
+    platform: iOS
+    sources: [Perch]
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: io.perch.ipad
+        INFOPLIST_KEY_UISupportedInterfaceOrientations: "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight"
+  PerchTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources: [PerchTests]
+    dependencies:
+      - target: Perch

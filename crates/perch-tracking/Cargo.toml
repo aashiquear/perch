@@ -1,0 +1,15 @@
+[package]
+name = "perch-tracking"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "3DOF head tracking: IMU fusion, gyro-bias calibration, drift handling, re-centre, latency prediction"
+
+[dependencies]
+perch-proto.workspace = true
+nalgebra.workspace = true
+serde.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true

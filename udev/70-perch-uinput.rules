@@ -1,0 +1,2 @@
+# /dev/uinput for the Perch virtual keyboard/mouse (members of `input`).
+KERNEL=="uinput", SUBSYSTEM=="misc", MODE="0660", GROUP="input", OPTIONS+="static_node=uinput"
