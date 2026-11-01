@@ -254,6 +254,21 @@ pub async fn run(
                             }
                         }
                     }
+                    UiMsg::SetNaturalScroll(natural) => {
+                        cfg.input.natural_scroll = natural;
+                        if let Some(paths) = engine.lock().await.paths() {
+                            if let Err(e) = paths.save_config(&cfg) {
+                                tracing::warn!("could not save scroll direction: {e}");
+                            }
+                        }
+                    }
+                    UiMsg::SetAudioSink(id) => {
+                        match tokio::task::spawn_blocking(move || crate::audio::set_default(id)).await {
+                            Ok(Ok(())) => tracing::info!(id, "default audio output changed"),
+                            Ok(Err(e)) => tracing::warn!("audio output: {e}"),
+                            Err(e) => tracing::warn!("audio output task: {e}"),
+                        }
+                    }
                     UiMsg::ParkPointer => {
                         if let Ok(mut b) = backend.try_lock() {
                             if let Some(b) = b.as_mut() {

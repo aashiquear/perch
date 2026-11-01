@@ -33,6 +33,10 @@ pub enum UiMsg {
     /// The OS pointer strayed onto the glasses output while in laptop mode:
     /// put it back on the laptop.
     ParkPointer,
+    /// Persist the touchpad scroll direction chosen in the panel.
+    SetNaturalScroll(bool),
+    /// Make this PipeWire sink the default audio output.
+    SetAudioSink(u32),
 }
 
 /// Open the platform backend, if any.

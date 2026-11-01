@@ -183,3 +183,10 @@ window (clicking the button itself focuses the panel, so moving "the focused
 window" immediately would move the panel). Per window: Focus, To laptop,
 Close app, display size, width, pin. Brightness cannot be set: the Rokid Max
 driver (`ar-drivers`) only reports it; use the rocker on the right temple.
+
+Sound and scrolling (panel only): a "Sound output" list of PipeWire sinks
+with a one-click swap between the glasses (the GPU's DisplayPort/HDMI
+audio, where the Rokid Max's speakers live) and the laptop; it changes the
+default output, so playing streams follow, independent of what is shown.
+"Natural scrolling" flips the two-finger direction of the grabbed touchpad
+and is saved as `input.natural_scroll`.

@@ -149,6 +149,11 @@ impl Touchpad {
         }
     }
 
+    /// Switch between natural (content follows fingers) and reverse scrolling.
+    pub fn set_natural_scroll(&mut self, natural: bool) {
+        self.cfg.natural_scroll = natural;
+    }
+
     /// Feed one raw report; events produced at `Sync` are pushed to `out`.
     pub fn feed(&mut self, raw: Raw, out: &mut Vec<InputEvent>) {
         match raw {

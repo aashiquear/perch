@@ -284,6 +284,15 @@ impl EvdevSource {
         })
     }
 
+    /// Natural vs reverse two-finger scrolling on every captured touchpad.
+    pub fn set_natural_scroll(&mut self, natural: bool) {
+        for (_, pad) in &mut self.devices {
+            if let Some(p) = pad {
+                p.set_natural_scroll(natural);
+            }
+        }
+    }
+
     fn translate(&mut self, ev: EvEvent) -> Option<InputEvent> {
         match ev.event_type() {
             EventType::KEY => {

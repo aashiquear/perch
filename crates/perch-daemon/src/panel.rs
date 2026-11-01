@@ -28,6 +28,8 @@ pub struct PanelSnapshot {
     pub gaze: (f32, f32),
     /// Host name advertised on mDNS.
     pub host: String,
+    /// Audio outputs (default marked).
+    pub sinks: Vec<crate::audio::Sink>,
 }
 
 /// Product shot of the glasses we know, shown in the header once detected.
@@ -66,6 +68,7 @@ pub struct ControlPanel {
     renderer: egui_wgpu::Renderer,
     commands: mpsc::UnboundedSender<UiMsg>,
     grab: Arc<AtomicBool>,
+    natural_scroll: Arc<AtomicBool>,
     /// Grid being edited with the sliders (applied when a drag ends).
     grid_edit: Option<Grid>,
     icons: HashMap<Icon, egui::TextureHandle>,
@@ -86,6 +89,7 @@ impl ControlPanel {
         el: &ActiveEventLoop,
         commands: mpsc::UnboundedSender<UiMsg>,
         grab: Arc<AtomicBool>,
+        natural_scroll: Arc<AtomicBool>,
     ) -> anyhow::Result<Self> {
         let attrs = Window::default_attributes()
             .with_title("Perch")
@@ -158,6 +162,7 @@ impl ControlPanel {
             renderer,
             commands,
             grab,
+            natural_scroll,
             grid_edit: None,
             icons,
             glasses_img,
@@ -555,6 +560,67 @@ impl ControlPanel {
                 .small()
                 .weak(),
             );
+        }
+        ui.add_space(6.0);
+        // ---- sound output + scrolling ------------------------------------------
+        ui.horizontal(|ui| {
+            ui.label(egui::RichText::new("Sound output").strong());
+            let current = snap.sinks.iter().find(|s| s.is_default);
+            let label = current
+                .map(|s| s.description.clone())
+                .unwrap_or_else(|| "(unknown)".into());
+            let mut pick: Option<u32> = None;
+            egui::ComboBox::from_id_salt("audio-sink")
+                .selected_text(label)
+                .width(300.0)
+                .show_ui(ui, |ui| {
+                    for s in &snap.sinks {
+                        let tag = if s.looks_like_glasses() { "  ◉ glasses" } else { "" };
+                        if ui
+                            .selectable_label(s.is_default, format!("{}{tag}", s.description))
+                            .clicked()
+                        {
+                            pick = Some(s.id);
+                        }
+                    }
+                });
+            // One-click swap between the glasses (HDMI/DP audio) and the laptop.
+            if let Some(cur) = current {
+                let target = if cur.looks_like_glasses() {
+                    snap.sinks.iter().find(|s| !s.looks_like_glasses())
+                } else {
+                    snap.sinks.iter().find(|s| s.looks_like_glasses())
+                };
+                if let Some(t) = target {
+                    let txt = if cur.looks_like_glasses() {
+                        "→ laptop"
+                    } else {
+                        "→ glasses"
+                    };
+                    if ui.button(txt).on_hover_text(&t.description).clicked() {
+                        pick = Some(t.id);
+                    }
+                }
+            }
+            if let Some(id) = pick {
+                let _ = self.commands.send(UiMsg::SetAudioSink(id));
+            }
+        });
+        ui.label(
+            egui::RichText::new("The glasses' speakers are the GPU's DisplayPort audio; this changes the default output independently of what is shown.")
+                .small()
+                .weak(),
+        );
+        let mut natural = self.natural_scroll.load(Ordering::Relaxed);
+        if ui
+            .checkbox(
+                &mut natural,
+                "Natural scrolling on the touchpad in glasses mode (content follows fingers)",
+            )
+            .changed()
+        {
+            self.natural_scroll.store(natural, Ordering::Relaxed);
+            let _ = self.commands.send(UiMsg::SetNaturalScroll(natural));
         }
         ui.add_space(4.0);
         ui.label(

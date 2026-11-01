@@ -96,6 +96,9 @@ pub struct InputConfig {
     /// Ctrl+Alt+<this HID usage> moves the focused window to a half-width
     /// glasses display (default `H`). 0 disables.
     pub move_half_chord_usage: u16,
+    /// Touchpad two-finger scrolling: content follows the fingers (true) or
+    /// the reverse. Toggle in the panel; saved here.
+    pub natural_scroll: bool,
 }
 
 /// Buttons section.
@@ -147,6 +150,7 @@ impl Default for InputConfig {
             grab_chord_usage: 0x13,      // Ctrl+Alt+P
             move_chord_usage: 0x0a,      // Ctrl+Alt+G
             move_half_chord_usage: 0x0b, // Ctrl+Alt+H
+            natural_scroll: true,
         }
     }
 }

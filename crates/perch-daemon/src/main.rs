@@ -7,6 +7,7 @@
 //! perchd --config-dir ./dev   # keep state out of ~/.config while hacking
 //! ```
 
+mod audio;
 mod capture;
 mod config;
 mod device;
@@ -110,10 +111,15 @@ fn main() -> anyhow::Result<()> {
     // Physical mouse/keyboard, grabbed from the OS while `grab` is set, feed
     // the spatial pointer on the glasses. Scroll Lock or Ctrl+Alt+P toggles it.
     let grab = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    // Touchpad scroll direction, toggled live from the panel.
+    let natural_scroll = Arc::new(std::sync::atomic::AtomicBool::new(cfg.input.natural_scroll));
+    #[cfg(not(feature = "render"))]
+    let _ = &natural_scroll;
     #[cfg(all(target_os = "linux", feature = "linux-input", feature = "render"))]
     let device_rx = {
         let (tx, rx) = std::sync::mpsc::channel::<perch_proto::InputEvent>();
         let grab = Arc::clone(&grab);
+        let natural_scroll2 = Arc::clone(&natural_scroll);
         let panic_key = cfg.input.panic_key_usage;
         let chord_key = cfg.input.grab_chord_usage;
         let send_key = cfg.input.move_chord_usage;
@@ -135,7 +141,14 @@ fn main() -> anyhow::Result<()> {
                     let mut grabbed = false;
                     let mut send_pending: Option<(u32, u32)> = None;
                     let mut grab_pending = false;
+                    let mut natural = natural_scroll2.load(Ordering::Relaxed);
+                    src.set_natural_scroll(natural);
                     loop {
+                        let n = natural_scroll2.load(Ordering::Relaxed);
+                        if n != natural {
+                            natural = n;
+                            src.set_natural_scroll(n);
+                        }
                         let want = grab.load(Ordering::Relaxed);
                         if want != grabbed {
                             match src.set_grabbed(want) {
@@ -260,6 +273,8 @@ fn main() -> anyhow::Result<()> {
                 fps: cfg.capture.fps,
                 commands: ui_tx,
                 grab,
+                natural_scroll: Arc::clone(&natural_scroll),
+                sinks: audio::spawn_watcher(),
                 #[cfg(all(target_os = "linux", feature = "linux-input"))]
                 device_rx: Some(device_rx),
                 #[cfg(not(all(target_os = "linux", feature = "linux-input")))]

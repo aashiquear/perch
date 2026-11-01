@@ -32,6 +32,10 @@ pub struct CaptureSetup {
     pub grab: Arc<std::sync::atomic::AtomicBool>,
     /// Physical input events while grabbed.
     pub device_rx: Option<std::sync::mpsc::Receiver<perch_proto::InputEvent>>,
+    /// Touchpad scroll direction (true = natural), toggled by the panel.
+    pub natural_scroll: Arc<std::sync::atomic::AtomicBool>,
+    /// Audio outputs, refreshed in the background, for the panel.
+    pub sinks: crate::audio::Sinks,
 }
 
 /// Everything the render loop needs.
@@ -152,6 +156,7 @@ impl RenderApp {
                 fps: self.last_fps,
                 gaze: perch_space::gaze_angles(&e.pose),
                 host: self.host.clone(),
+                sinks: self.capture.sinks.lock().map(|s| s.clone()).unwrap_or_default(),
             }
         };
         panel.draw(&snap);
@@ -419,7 +424,12 @@ impl ApplicationHandler for RenderApp {
             Err(e) => tracing::error!("compositor init failed: {e}"),
         }
         self.window = Some(window);
-        match ControlPanel::new(el, self.capture.commands.clone(), Arc::clone(&self.capture.grab)) {
+        match ControlPanel::new(
+            el,
+            self.capture.commands.clone(),
+            Arc::clone(&self.capture.grab),
+            Arc::clone(&self.capture.natural_scroll),
+        ) {
             Ok(p) => self.panel = Some(p),
             Err(e) => tracing::warn!("control panel unavailable: {e}"),
         }
