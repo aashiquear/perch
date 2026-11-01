@@ -60,6 +60,8 @@ pub struct RenderApp {
     /// Last check that the glasses window still sits on its monitor.
     monitor_check: Instant,
     was_grabbed: bool,
+    /// Last time the stray OS pointer was sent back to the laptop.
+    park_last: Instant,
     host: String,
     last_fps: f32,
 }
@@ -129,6 +131,7 @@ impl RenderApp {
             panel_last: Instant::now(),
             monitor_check: Instant::now(),
             was_grabbed: false,
+            park_last: Instant::now(),
             host: String::new(),
             last_fps: 0.0,
         }
@@ -465,6 +468,16 @@ impl ApplicationHandler for RenderApp {
             // must not echo back into it through the compositor.
             WindowEvent::CursorMoved { .. } | WindowEvent::CursorLeft { .. } | WindowEvent::MouseInput { .. }
                 if self.interact.grabbed() => {}
+            // Laptop mode: the OS pointer has no business on the glasses
+            // output (it is invisible there and Perch would mirror it as its
+            // own pointer). Send it home; the bar is driven in glasses mode.
+            WindowEvent::CursorEntered { .. } if !self.interact.grabbed() => {
+                if self.park_last.elapsed() >= std::time::Duration::from_millis(500) {
+                    self.park_last = Instant::now();
+                    tracing::info!("OS pointer entered the glasses output in laptop mode; parking it on the laptop");
+                    let _ = self.capture.commands.send(crate::capture::UiMsg::ParkPointer);
+                }
+            }
             WindowEvent::CursorMoved { position, .. } => {
                 if let Some(ctx) = self.ctx.clone() {
                     let mut e = self.engine.blocking_lock();

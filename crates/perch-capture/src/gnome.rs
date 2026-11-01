@@ -24,6 +24,8 @@ use std::time::Duration;
 use uuid::Uuid;
 
 const RD: &str = "org.gnome.Mutter.RemoteDesktop";
+/// Index of the stream-less control session in the D-Bus thread.
+const CONTROL_SESSION: usize = 0;
 const SC: &str = "org.gnome.Mutter.ScreenCast";
 /// Default virtual monitor size. The glasses panel is 1920 px wide, so one
 /// window at this size maps about 1:1 when it fills the view.
@@ -359,14 +361,15 @@ impl GnomeBackend {
         } else {
             (from - to, KEY_LEFT)
         };
+        let _ = d_index;
         let _ = self.req_tx.send(Req::Chord {
-            display: d_index,
+            display: CONTROL_SESSION,
             codes: vec![KEY_LEFTMETA, KEY_LEFTSHIFT, key],
             times: steps,
         });
         if self.auto_maximize && self.ensure_maximize_binding() {
             let _ = self.req_tx.send(Req::Chord {
-                display: d_index,
+                display: CONTROL_SESSION,
                 codes: vec![KEY_LEFTCTRL, KEY_LEFTMETA, KEY_LEFTALT, KEY_F11],
                 times: 1,
             });
@@ -462,8 +465,9 @@ impl CaptureBackend for GnomeBackend {
             d.index,
         );
         self.focus_app_on(slot_i);
+        let _ = d_index;
         let _ = self.req_tx.send(Req::Chord {
-            display: d_index,
+            display: CONTROL_SESSION,
             codes: vec![KEY_LEFTALT, KEY_F4],
             times: 1,
         });
@@ -566,9 +570,9 @@ impl CaptureBackend for GnomeBackend {
             .find(|m| m.x == laptop_x && m.y == 0)
             .map(|m| (m.w, m.h))
             .unwrap_or((2048.0, 1280.0));
-        if let Some(d) = self.displays.iter().flatten().next() {
+        {
             let _ = self.req_tx.send(Req::Inject {
-                display: d.index,
+                display: CONTROL_SESSION,
                 events: vec![
                     InputEvent::MouseMove {
                         dx: -30000.0,
@@ -698,8 +702,23 @@ fn dbus_thread(rx: mpsc::Receiver<Req>, ready: mpsc::Sender<Result<(), String>>)
             return;
         }
     };
-    let _ = ready.send(Ok(()));
+    // Session 0 is the control session: a RemoteDesktop session with no
+    // stream, used for parking the pointer and keyboard chords. It outlives
+    // every display, so releasing the last window can still bring the OS
+    // pointer home.
     let mut sessions: Vec<MutterSession> = Vec::new();
+    match rt.block_on(create_control_session(&conn)) {
+        Ok(rd) => sessions.push(MutterSession {
+            rd,
+            stream_path: String::new(),
+            held: Default::default(),
+        }),
+        Err(e) => {
+            let _ = ready.send(Err(format!("control session: {e}")));
+            return;
+        }
+    }
+    let _ = ready.send(Ok(()));
     while let Ok(first) = rx.recv() {
         // Drain what else is queued so pointer moves can be coalesced.
         let mut batch = vec![first];
@@ -790,6 +809,22 @@ async fn proxy(
 
 /// RemoteDesktop session + linked ScreenCast session + one virtual stream,
 /// started; returns the RD session proxy, the stream path and its node id.
+/// A RemoteDesktop session with no screen-cast: relative pointer motion
+/// and keyboard only.
+async fn create_control_session(conn: &zbus::Connection) -> Result<zbus::Proxy<'static>, String> {
+    use zbus::zvariant::OwnedObjectPath;
+    let rd_root = proxy(conn, RD, "/org/gnome/Mutter/RemoteDesktop".into(), RD).await?;
+    let rd_path: OwnedObjectPath = rd_root
+        .call("CreateSession", &())
+        .await
+        .map_err(|e| format!("RemoteDesktop.CreateSession: {e}"))?;
+    let rd = proxy(conn, RD, rd_path.to_string(), "org.gnome.Mutter.RemoteDesktop.Session").await?;
+    rd.call_method("Start", &())
+        .await
+        .map_err(|e| format!("RemoteDesktop.Session.Start: {e}"))?;
+    Ok(rd)
+}
+
 async fn create_session(conn: &zbus::Connection) -> Result<(zbus::Proxy<'static>, String, u32), String> {
     use futures_util::StreamExt;
     use std::collections::HashMap;

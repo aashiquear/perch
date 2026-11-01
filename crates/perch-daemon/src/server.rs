@@ -254,6 +254,13 @@ pub async fn run(
                             }
                         }
                     }
+                    UiMsg::ParkPointer => {
+                        if let Ok(mut b) = backend.try_lock() {
+                            if let Some(b) = b.as_mut() {
+                                b.release_pointer();
+                            }
+                        }
+                    }
                     UiMsg::Input { window, events } => {
                         let source = engine.lock().await.ws.get(window).map(|w| w.source.clone());
                         let Some(source) = source else { continue };

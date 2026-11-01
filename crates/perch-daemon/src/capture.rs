@@ -30,6 +30,9 @@ pub enum UiMsg {
     },
     /// The physical-input grab was switched on or off.
     GrabChanged(bool),
+    /// The OS pointer strayed onto the glasses output while in laptop mode:
+    /// put it back on the laptop.
+    ParkPointer,
 }
 
 /// Open the platform backend, if any.
