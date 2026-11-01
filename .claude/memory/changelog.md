@@ -48,3 +48,4 @@
 - 2026-10-31 v0.1.0 scaffold: 11 crates, Android + iPad apps, docs, CI. 51 unit tests green.
   Real Rokid backend compiles (vendored libusb). Capture backends are scaffolds (M2).
 - 2026-11-01: perch-input touchpad interpreter (abs multitouch pads such as Apple internal trackpad were skipped by the mouse filter so grab captured only the keyboard); Ctrl+Alt+P grab toggle for keyboards without Scroll Lock. Why: user had `input` group but no OS control.
+- 2026-11-01: evdev devices set O_NONBLOCK (round-robin poll was parking on the keyboard so touchpad motion only arrived after a key event); capture frames wider than 2560 px are box-downscaled 2x before upload (4096x2560 monitor capture = 42 MB/frame dropped render from 244 to ~80 fps with 90 ms stalls).

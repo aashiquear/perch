@@ -276,6 +276,31 @@ impl CaptureSource for TestPattern {
     }
 }
 
+/// Captured frames wider than this are halved before upload: the glasses
+/// panel is 1920 px wide, so a 4K+ HiDPI monitor capture is oversampled and
+/// its 40+ MB/frame upload stalls the render loop.
+pub const MAX_UPLOAD_WIDTH: u32 = 2560;
+
+/// Box-filter a tightly packed 4-byte-per-pixel image by 2 in each axis.
+/// Odd trailing rows/columns are dropped. Returns `(data, w/2, h/2)`.
+pub fn downscale2x(src: &[u8], w: u32, h: u32, stride: usize) -> (Vec<u8>, u32, u32) {
+    let (ow, oh) = (w / 2, h / 2);
+    let mut out = vec![0u8; (ow * oh * 4) as usize];
+    for y in 0..oh as usize {
+        let r0 = &src[2 * y * stride..2 * y * stride + (w as usize) * 4];
+        let r1 = &src[(2 * y + 1) * stride..(2 * y + 1) * stride + (w as usize) * 4];
+        let dst = &mut out[y * ow as usize * 4..(y + 1) * ow as usize * 4];
+        for x in 0..ow as usize {
+            let i = x * 8;
+            for c in 0..4 {
+                let sum = r0[i + c] as u16 + r0[i + 4 + c] as u16 + r1[i + c] as u16 + r1[i + 4 + c] as u16;
+                dst[x * 4 + c] = ((sum + 2) / 4) as u8;
+            }
+        }
+    }
+    (out, ow, oh)
+}
+
 /// Host monotonic time in µs.
 pub fn now_us() -> u64 {
     use std::sync::OnceLock;
@@ -312,5 +337,19 @@ mod tests {
             default_backend(uuid::Uuid::nil()),
             Err(CaptureError::Unavailable(_))
         ));
+    }
+
+    #[test]
+    fn downscale2x_averages_blocks_and_honours_stride() {
+        // 4x2 image with 4 bytes padding per row.
+        let mut src = vec![0u8; 2 * 20];
+        for (x, v) in [(0, 10u8), (1, 20), (2, 100), (3, 200)] {
+            for row in 0..2 {
+                src[row * 20 + x * 4..row * 20 + x * 4 + 4].copy_from_slice(&[v, v, v, 255]);
+            }
+        }
+        let (out, w, h) = downscale2x(&src, 4, 2, 20);
+        assert_eq!((w, h), (2, 1));
+        assert_eq!(out, vec![15, 15, 15, 255, 150, 150, 150, 255]);
     }
 }

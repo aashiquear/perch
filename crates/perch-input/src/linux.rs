@@ -227,6 +227,12 @@ impl EvdevSource {
             if name.contains("Perch Virtual") {
                 continue;
             }
+            // Devices open blocking by default; the round-robin poll below
+            // must never park on one device while another has events.
+            if let Err(e) = d.set_nonblocking(true) {
+                tracing::warn!(name, "evdev nonblocking: {e}");
+                continue;
+            }
             let keys = d.supported_keys();
             let is_kbd = keys.is_some_and(|k| k.contains(KeyCode::KEY_A));
             let has_rel = d

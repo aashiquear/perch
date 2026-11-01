@@ -762,6 +762,12 @@ fn connect_stream(core: &pipewire::core::Core, node_id: u32, fps: u32, slot: Arc
                 tracing::info!(node_id = ud.node_id, width = w, height = h, "first capture frame");
             }
             ud.frames += 1;
+            let (out, w, h) = if w > crate::MAX_UPLOAD_WIDTH {
+                crate::downscale2x(&out, w, h, row)
+            } else {
+                (out, w, h)
+            };
+            let row = (w as usize) * 4;
             let frame = Frame::Rgba {
                 width: w,
                 height: h,
