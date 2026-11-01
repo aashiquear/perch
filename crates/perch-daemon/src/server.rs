@@ -373,7 +373,14 @@ async fn apply_effects(
                 let _ = dev.cmd_tx.send(DeviceCommand::SetBrightness(b));
             }
             Effect::PickSources { multiple } => {
-                spawn_pick(Arc::clone(backend), None, multiple, pick_tx.clone());
+                if crate::capture::PERCH_FOCUSED.load(std::sync::atomic::Ordering::Relaxed) {
+                    tracing::warn!("send window: Perch's own window is focused; focus the app first");
+                    server.broadcast(Message::Event(Event::Error {
+                        message: "focus the app you want on the glasses, then press Ctrl+Alt+G".into(),
+                    }));
+                } else {
+                    spawn_pick(Arc::clone(backend), None, multiple, pick_tx.clone());
+                }
             }
             Effect::ReleaseSource(source) => {
                 if let Ok(mut b) = backend.lock() {

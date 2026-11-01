@@ -3,7 +3,12 @@
 //! compiled in for this platform; windows then show the test pattern.
 
 use perch_capture::CaptureBackend;
+use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex};
+
+/// True while one of Perch's own windows (glasses view or control panel)
+/// has keyboard focus. "Send the focused window" must not move Perch itself.
+pub static PERCH_FOCUSED: AtomicBool = AtomicBool::new(false);
 use uuid::Uuid;
 
 /// Shared handle.
