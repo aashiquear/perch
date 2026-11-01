@@ -127,6 +127,7 @@ fn main() -> anyhow::Result<()> {
                         }
                     };
                     let mut grabbed = false;
+                    let mut send_pending = false;
                     loop {
                         let want = grab.load(Ordering::Relaxed);
                         if want != grabbed {
@@ -149,6 +150,18 @@ fn main() -> anyhow::Result<()> {
                                 break;
                             }
                         };
+                        // A send requested with Ctrl+Alt+G fires only once Ctrl and
+                        // Alt are physically up: the daemon injects Super+Shift+Right
+                        // and GNOME would otherwise read Ctrl+Alt+Shift+Right, which
+                        // moves the window to another workspace instead.
+                        if let perch_proto::InputEvent::Key { mods, .. } = ev {
+                            if send_pending && mods & 5 == 0 {
+                                send_pending = false;
+                                let _ = ui_tx2.send(capture::UiMsg::Command(perch_proto::Command::PickSources {
+                                    multiple: false,
+                                }));
+                            }
+                        }
                         if let perch_proto::InputEvent::Key {
                             usage,
                             down: true,
@@ -158,9 +171,7 @@ fn main() -> anyhow::Result<()> {
                             // Ctrl+Alt+<chord> (either side) or the panic key.
                             let ctrl_alt = mods & 1 != 0 && mods & 4 != 0;
                             if send_key != 0 && usage == send_key && ctrl_alt {
-                                let _ = ui_tx2.send(capture::UiMsg::Command(perch_proto::Command::PickSources {
-                                    multiple: false,
-                                }));
+                                send_pending = true;
                                 continue;
                             }
                             if usage == panic_key || (chord_key != 0 && usage == chord_key && ctrl_alt) {
