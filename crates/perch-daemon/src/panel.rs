@@ -40,15 +40,18 @@ const FULL: (u32, u32) = (1920, 1080);
 /// Half-width glasses display.
 const HALF: (u32, u32) = (960, 1080);
 
-/// Layout presets for the "Arrange" menu. Spans are in layout blocks
-/// (`grid.block_w_m`, 0.6 m by default): 1 = narrow, 2 = normal, 3 = wide.
-const PRESETS: &[(&str, u32, &[u32])] = &[
-    ("1 × 1", 1, &[3]),
-    ("3 equal", 1, &[2, 2, 2]),
-    ("wide centre", 1, &[1, 3, 1]),
-    ("wide left", 1, &[3, 1, 1]),
-    ("wide right", 1, &[1, 1, 3]),
-    ("2 × 2", 2, &[2, 2, 2, 2]),
+/// Layout presets for the "Arrange" menu: rows, then the display width per
+/// window in list order (2 = full 1920×1080, 1 = half 960×1080). A window
+/// whose display is already that width keeps it; the others are re-created
+/// at the new size, so a full window keeps its aspect and the narrow ones
+/// become genuinely half as wide.
+const PRESETS: &[(&str, &str, u32, &[u32])] = &[
+    ("1 × 1", "one full-size window", 1, &[2]),
+    ("3 equal", "three full-size windows in a row", 1, &[2, 2, 2]),
+    ("wide centre", "half · full · half", 1, &[1, 2, 1]),
+    ("wide left", "full · half · half", 1, &[2, 1, 1]),
+    ("wide right", "half · half · full", 1, &[1, 1, 2]),
+    ("2 × 2", "two rows of two full-size windows", 2, &[2, 2, 2, 2]),
 ];
 
 /// The panel window and its GPU state.
@@ -224,7 +227,7 @@ impl ControlPanel {
                 self.move_fire_at = None;
             }
             egui::CentralPanel::default().show(ctx, |ui| {
-                egui::ScrollArea::vertical().show(ui, |ui| {
+                egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
                     self.ui(ui, snap, &mut to_send, &mut grab_toggle, &mut quit);
                 });
             });
@@ -529,18 +532,25 @@ impl ControlPanel {
         });
         if self.arrange_open {
             ui.horizontal_wrapped(|ui| {
-                if ui.button("re-flow").on_hover_text("Keep sizes, pack rows").clicked() {
+                if ui
+                    .add_sized([60.0, 44.0], egui::Button::new("re-flow"))
+                    .on_hover_text("Keep sizes, pack rows")
+                    .clicked()
+                {
                     out.push(Command::ArrangeGrid);
                 }
-                for (name, rows, spans) in PRESETS {
-                    if ui.button(*name).clicked() {
-                        out.extend(preset_commands(s, *rows, spans));
+                for (name, hint, rows, widths) in PRESETS {
+                    if preset_button(ui, *rows, widths)
+                        .on_hover_text(format!("{name}: {hint}"))
+                        .clicked()
+                    {
+                        out.extend(preset_commands(s, *rows, widths));
                     }
                 }
             });
             ui.label(
                 egui::RichText::new(
-                    "Presets set rows and per-window widths (narrow / normal / wide blocks) in list order.",
+                    "Widths apply to windows in list order: full keeps its aspect, half gets a 960-wide display.",
                 )
                 .small()
                 .weak(),
@@ -746,14 +756,58 @@ fn layout_map(ui: &mut egui::Ui, s: &State) {
 
 /// Commands that apply a preset: rows, then width + slot per window in
 /// list order; windows beyond the preset keep flowing automatically.
-fn preset_commands(s: &State, rows: u32, spans: &[u32]) -> Vec<Command> {
+/// A small picture of the preset: boxes proportional to the widths.
+fn preset_button(ui: &mut egui::Ui, rows: u32, widths: &[u32]) -> egui::Response {
+    let size = egui::vec2(72.0, 44.0);
+    let (rect, resp) = ui.allocate_exact_size(size, egui::Sense::click());
+    let p = ui.painter();
+    let bg = if resp.hovered() {
+        egui::Color32::from_rgb(50, 56, 70)
+    } else {
+        egui::Color32::from_rgb(34, 37, 46)
+    };
+    p.rect_filled(rect, 4.0, bg);
+    let per_row = widths.len().div_ceil(rows as usize).max(1);
+    let inner = rect.shrink(4.0);
+    let row_h = inner.height() / rows as f32;
+    for r in 0..rows as usize {
+        let row: Vec<u32> = widths.iter().skip(r * per_row).take(per_row).copied().collect();
+        let total: u32 = row.iter().sum::<u32>().max(1);
+        let mut x = inner.left();
+        for w in row {
+            let ww = inner.width() * w as f32 / total as f32;
+            let cell = egui::Rect::from_min_size(egui::pos2(x, inner.top() + r as f32 * row_h), egui::vec2(ww, row_h))
+                .shrink(1.5);
+            p.rect_filled(cell, 2.0, egui::Color32::from_rgb(120, 170, 220));
+            x += ww;
+        }
+    }
+    resp
+}
+
+/// Commands that apply a preset: rows, then per window in list order the
+/// display width (re-created only when it differs), automatic span and
+/// its slot. Windows beyond the preset keep flowing automatically.
+fn preset_commands(s: &State, rows: u32, widths: &[u32]) -> Vec<Command> {
     let mut out = vec![Command::SetGrid {
         grid: Grid { rows, ..s.grid },
     }];
-    let per_row = spans.len().div_ceil(rows as usize).max(1);
+    let per_row = widths.len().div_ceil(rows as usize).max(1);
     for (i, w) in s.windows.iter().enumerate() {
-        let span = spans.get(i).copied().unwrap_or(0);
-        out.push(Command::SetWindowSpan { id: w.id, span });
+        if let Some(&want) = widths.get(i) {
+            // A half display is 960×1080 (aspect 0.89); full is 16:9.
+            let aspect = w.placement.width_m / w.placement.height_m.max(0.01);
+            let is_half = aspect < 1.2;
+            if (want == 1) != is_half {
+                let (width, height) = if want == 1 { HALF } else { FULL };
+                out.push(Command::ResizeDisplay {
+                    id: w.id,
+                    width,
+                    height,
+                });
+            }
+        }
+        out.push(Command::SetWindowSpan { id: w.id, span: 0 });
         out.push(Command::SlotWindow {
             id: w.id,
             row: ((i / per_row) as u32).min(rows - 1),

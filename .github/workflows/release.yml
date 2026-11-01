@@ -1,0 +1,36 @@
+name: release
+on:
+  push:
+    tags: ["v*"]
+permissions:
+  contents: write
+jobs:
+  linux-x86_64:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: system libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libudev-dev libpipewire-0.3-dev libclang-dev \
+            libwayland-dev libxkbcommon-dev
+      - name: build
+        run: cargo build --release -p perch-daemon -p perch-cli --features perch-daemon/full-linux
+      - name: package
+        run: |
+          v="${GITHUB_REF_NAME}"
+          d="perch-${v}-linux-x86_64"
+          mkdir -p "$d"
+          cp target/release/perchd target/release/perch "$d"/
+          cp -r udev README.md LICENSE* "$d"/ 2>/dev/null || true
+          cp docs/UX.md "$d"/UX.md
+          tar czf "$d.tar.gz" "$d"
+          sha256sum "$d.tar.gz" > "$d.tar.gz.sha256"
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            perch-*-linux-x86_64.tar.gz
+            perch-*-linux-x86_64.tar.gz.sha256
+          generate_release_notes: true

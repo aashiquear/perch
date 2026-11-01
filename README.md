@@ -18,53 +18,62 @@ world-pinned windows. Perch does the same thing on your own machines:
 Primary use: regular laptop coding, design work, and gaming while wearing the
 glasses, with several windows pinned around you instead of one bobbing mirror.
 
-## Status: v0.1 scaffold — tracking/spatial core real and tested, I/O backends staged
+## Status: v0.1.0 — Linux works end to end on GNOME; other hosts staged
 
 | Layer | State |
 |---|---|
-| IMU fusion, gyro-bias calibration, re-centre, latency prediction (`perch-tracking`) | **done, unit-tested** |
-| Spatial windows, projection, smooth-follow, presets, layouts (`perch-space`) | **done, unit-tested** |
-| Wire protocol JSON + postcard (`perch-proto`) | **done, byte-exact tests shared with Kotlin/Swift** |
+| IMU fusion, gyro-bias calibration, re-centre, latency prediction (`perch-tracking`) | **done, unit-tested; 0.08°/min drift measured on a Rokid Max** |
+| Spatial windows, projection, flow-row grid, drag-to-rearrange, spans (`perch-space`) | **done, unit-tested** |
+| Wire protocol JSON + postcard (`perch-proto`, 1.5) | **done, byte-exact tests shared with Kotlin/Swift** |
 | mDNS + WebSocket + UDP (`perch-net`) | **done, tested** |
-| Rokid Max USB backend via `ar-drivers` (`perch-hal --features rokid`) | **compiles against real driver; needs on-device test** |
-| wgpu compositor, mono + SBS stereo (`perch-compositor`) | **done; renders test pattern** |
-| Keyboard/mouse routing + edge switching (`perch-input`) | **done, tested; Linux uinput/evdev backend compiles** |
-| Daemon `perchd` + CLI `perch` | **done, run with `--mock synthetic` today** |
-| Screen capture | Linux PipeWire portal ✅ (`perch pick`); WGC / SCK scaffold → [M2](docs/ROADMAP.md) |
-| Android host app (USB IMU, GL presentation, mirror window) + touchpad | **written, not yet built on a device** |
-| iPad touchpad app (SwiftUI) | **written, not yet built** |
+| Rokid Max USB backend via `ar-drivers` (`perch-hal --features rokid`) | **done; 444 Hz IMU verified on device** |
+| wgpu compositor, mono + SBS stereo, 240 fps paced (`perch-compositor`) | **done, on device** |
+| Glasses displays on GNOME: one Mutter virtual monitor per window, RemoteDesktop input (`perch-capture::gnome`) | **done, on device** |
+| Portal/PipeWire capture (other Wayland compositors) | **done; input via the RemoteDesktop portal** |
+| Keyboard/trackpad grab (evdev, touchpad gestures) + uinput fallback (`perch-input`) | **done, on device** |
+| Daemon `perchd` with on-glasses control bar and desktop dashboard; CLI `perch` | **done** |
+| Android host app (USB IMU, GL presentation, mirror window) + touchpad | written, not yet built on a device |
+| iPad touchpad app (SwiftUI) | written, not yet built |
 | Windows / macOS daemons | shared Rust core; backends → M4 |
 
 See [docs/ROADMAP.md](docs/ROADMAP.md) for milestones and
 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for how it fits together.
 
-## Quick start (Linux, Ubuntu 24.04+/26.04)
+## Quick start (Linux, Ubuntu 24.04+/26.04, GNOME on Wayland)
+
+Prebuilt binaries for x86_64 are attached to each
+[GitHub release](https://github.com/aashiquear/perch/releases); or build:
 
 ```bash
-# 1. toolchain
+# 1. toolchain + libraries
 curl https://sh.rustup.rs -sSf | sh            # Rust ≥ 1.80
-sudo apt install build-essential pkg-config     # for the vendored libusb build
-cargo install just                              # task runner (optional)
+sudo apt install build-essential pkg-config libudev-dev libpipewire-0.3-dev libclang-dev
 
-# 2. udev rule so perchd can open the glasses without sudo
+# 2. udev rules (glasses without sudo) and the input group (trackpad/keyboard grab)
 sudo cp udev/70-perch-rokid.rules udev/70-perch-uinput.rules /etc/udev/rules.d/
 sudo udevadm control --reload-rules && sudo udevadm trigger
-sudo usermod -aG input $USER && newgrp input   # for keyboard/mouse sharing
+sudo usermod -aG input $USER                    # then log out and back in
 
-# 3. build the pure core + daemon (no hardware needed) and run the tests
+# 3. build + headless tests
 cargo test
+cargo build --release -p perch-daemon -p perch-cli --features perch-daemon/full-linux
 
-# 4. run without glasses
-cargo run -p perch-daemon -- --mock synthetic --config-dir ./dev &
-cargo run -p perch-cli -- status
-cargo run -p perch-cli -- preset coding
-cargo run -p perch-cli -- windows
-
-# 5. real glasses, with rendering on the Rokid display
-cargo run -p perch-daemon --features full-linux --release
-cargo run -p perch-cli -- calibrate --seconds 30      # glasses flat on a table
-cargo run -p perch-cli -- recenter
+# 4. run with the glasses plugged in (set display.monitor_name in dev/perchd.toml, e.g. "DP-5")
+./target/release/perchd --config-dir ./dev
+./target/release/perch calibrate --seconds 30   # glasses flat on a table, once
 ```
+
+Then, with the glasses on:
+
+| do | how |
+|---|---|
+| move the focused app to the glasses | **Ctrl+Alt+G** (full) / **Ctrl+Alt+H** (half width), or the dashboard |
+| work in it: mouse + keyboard go to the glasses | **Ctrl+Alt+P** (again to come back) |
+| re-centre the view | temple button, or RECENTER on the bar |
+| bring an app back / close it / resize its display | bar tiles, dashboard, or `perch remove`, `perch close-app`, `perch resize` |
+
+Each glasses window is a virtual monitor GNOME creates for Perch; quitting
+`perchd` returns every app to the laptop. See [docs/UX.md](docs/UX.md).
 
 Phone/iPad: install the app, it finds `perchd` over mDNS, tap it, you have a
 trackpad. See [apps/android/README.md](apps/android/README.md) and

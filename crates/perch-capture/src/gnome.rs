@@ -208,13 +208,15 @@ impl GnomeBackend {
         // Mutter lays a changed monitor set out in one row, glasses panel
         // included; put the panel back under the laptop so window moves go
         // laptop → virtual displays directly, then re-read positions.
-        if self.arrange_layout() {
+        if self.arrange_layout(connector.as_deref()) {
             let now = self.layout_now();
             if let Some(m) = connector.as_ref().and_then(|c| now.iter().find(|m| &m.connector == c)) {
                 rect = Some((m.x, m.y, m.w, m.h));
             }
             self.layout = now;
         }
+        // Let GNOME finish re-laying out before any shortcut is sent.
+        std::thread::sleep(Duration::from_millis(350));
         tracing::info!(
             index = self.displays.len(),
             node_id = created.node_id,
@@ -250,7 +252,7 @@ impl GnomeBackend {
     /// Window moves hop monitor by monitor, so with the glasses panel in the
     /// row every move would cross it (and a missed step leaves the app on
     /// the glasses' own output). Returns true when a change was applied.
-    fn arrange_layout(&mut self) -> bool {
+    fn arrange_layout(&mut self, first: Option<&str>) -> bool {
         let Some(glasses) = self.glasses_connector.clone() else {
             return false;
         };
@@ -272,6 +274,15 @@ impl GnomeBackend {
             .filter(|m| m.connector != laptop.connector && m.connector != glasses)
             .collect();
         virtuals.sort_by_key(|m| m.x);
+        // The display a window is about to be moved to goes first: one hop
+        // from the laptop, so the move never depends on how many displays
+        // already exist (and a dropped hop can't land it on another app).
+        if let Some(f) = first {
+            if let Some(pos) = virtuals.iter().position(|m| m.connector == f) {
+                let m = virtuals.remove(pos);
+                virtuals.insert(0, m);
+            }
+        }
         // Already as wanted?
         let chained = virtuals
             .iter()
@@ -505,7 +516,7 @@ impl CaptureBackend for GnomeBackend {
     fn set_glasses_connector(&mut self, connector: &str) {
         self.glasses_connector = Some(connector.to_string());
         self.layout = self.layout_now();
-        if self.arrange_layout() {
+        if self.arrange_layout(None) {
             self.layout = self.layout_now();
         }
     }
@@ -607,7 +618,7 @@ impl CaptureBackend for GnomeBackend {
             // Mutter re-lays the remaining monitors out in a row; restore
             // the laptop / glasses-below / displays-right arrangement.
             std::thread::sleep(Duration::from_millis(400));
-            self.arrange_layout();
+            self.arrange_layout(None);
             self.layout = self.layout_now();
             for d in self.displays.iter_mut().flatten() {
                 if let Some(m) = d
@@ -710,11 +721,17 @@ fn dbus_thread(rx: mpsc::Receiver<Req>, ready: mpsc::Sender<Result<(), String>>)
     // pointer home.
     let mut sessions: Vec<MutterSession> = Vec::new();
     match rt.block_on(create_control_session(&conn)) {
-        Ok(rd) => sessions.push(MutterSession {
-            rd,
-            stream_path: String::new(),
-            held: Default::default(),
-        }),
+        Ok(rd) => {
+            // A fresh virtual keyboard's first events can be dropped while the
+            // compositor adds the device; press and release Shift once now so
+            // the first real shortcut is not the one that gets lost.
+            rt.block_on(chord(&rd, &[KEY_LEFTSHIFT], 1));
+            sessions.push(MutterSession {
+                rd,
+                stream_path: String::new(),
+                held: Default::default(),
+            });
+        }
         Err(e) => {
             let _ = ready.send(Err(format!("control session: {e}")));
             return;
@@ -949,6 +966,6 @@ async fn chord(rd: &zbus::Proxy<'static>, codes: &[u32], times: usize) {
             let _ = rd.call_method("NotifyKeyboardKeycode", &(c, false)).await;
             tokio::time::sleep(Duration::from_millis(15)).await;
         }
-        tokio::time::sleep(Duration::from_millis(200)).await;
+        tokio::time::sleep(Duration::from_millis(350)).await;
     }
 }
