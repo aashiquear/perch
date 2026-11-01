@@ -31,6 +31,7 @@ perch-net.workspace = true
 perch-input.workspace = true
 perch-compositor = { workspace = true, optional = true }
 perch-capture.workspace = true
+perch-ui.workspace = true
 winit = { workspace = true, optional = true }
 tokio.workspace = true
 serde.workspace = true

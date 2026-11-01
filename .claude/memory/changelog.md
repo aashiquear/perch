@@ -1,5 +1,13 @@
 # Changelog (Claude Code sessions) — newest first
 
+- 2026-11-01 Flow-row grid (protocol 1.3): window width from source pixels (`px_per_m`), rows re-flow
+  and re-centre on every change; `set_window_pixels`; `slot_window` is (row, index). Pointer
+  interaction on the glasses: click = focus, drag re-orders with insertion guide + ghost outlines
+  (`Workspace::drag_preview`), release outside rows = free placement; `Projector::unproject`.
+  New `perch-ui` crate (5×7 bitmap font + control bar) → bottom bar with RECENTER / CENTRE HERE /
+  ARRANGE / ROWS / NEARER / FARTHER / PICK / CALIBRATE / CLEAR; UI commands flow through a channel
+  into the engine loop.
+
 - 2026-11-01 Slot grid (protocol 1.2): `Grid` in proto + `state.grid`; `perch-space`
   `grid_slot_placement`, `Workspace::{set_grid,set_slot,arrange_grid,next_free_slot}` (persisted);
   commands `set_grid`/`slot_window`/`arrange_grid`; CLI `perch grid|slot|arrange`. Picked windows

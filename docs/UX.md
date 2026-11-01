@@ -58,21 +58,37 @@ IMU 1 ms → fusion 0.01 ms → predict to scan-out (+13 ms device, +4 ms margin
   for work, discrete windows you can pin are better. Can be a preset later.
 - Drawing a 3D "room".
 
-## The slot grid (since 1.2)
+## The layout grid (since 1.2, re-shaped in 1.3)
 
-Windows snap to a grid of cells on a sphere around the head: `cols × rows`
-cells of `cell_w × cell_h` metres with `gap` between them, `distance` away,
-centred at (`yaw`, `pitch`). Defaults: 3 × 1, 1.2 × 0.8 m, 0.1 m gap, 2 m.
-Each cell centre is wrapped onto the sphere, so a 3-wide grid curves around
-you rather than flattening at the edges. A window keeps its aspect ratio
-and is fitted inside its cell.
+Windows live in **rows** on a sphere around the head. A row is a flow
+layout: its windows sit side by side in order with a gap between them,
+centred on the layout centre, and **each window's width comes from its own
+pixel size** (`px_per_m`, default 1600 px/m: a 1920-px browser is 1.2 m, a
+960-px terminal 0.6 m), clamped to `max_w_m` and to the row height. Rows
+stack `row_h_m + gap_m` apart around `center_pitch`, row 0 on top.
+Defaults: 1 row, 0.8 m high, 0.08 m gap, 2 m away, centred straight ahead.
 
-- `perch pick` drops each new window into the next free slot (row-major);
-  once the grid is full, windows fan out to the right of where you looked.
-- `perch grid` prints the grid; `perch grid --cols 3 --rows 2 --cell-w 1.1
-  --cell-h 0.7 --gap 0.08 --distance 2 --yaw 0 --pitch -5 --arrange`
-  changes it and snaps everything in.
-- `perch slot <id> 2 0` moves a window to column 2, row 0 (evicting the
-  previous occupant from the slot, not from space).
-- `perch place` / `perch pin` take a window *out* of the grid.
-- The grid is saved with the workspace.
+- `perch pick` appends each new window to the emptiest row.
+- `perch grid` prints the grid; `perch grid --rows 2 --row-h 0.7 --distance
+  2.5 --px-per-m 1400 --arrange` changes it and re-flows everything.
+- `perch slot <id> <row> <index>` moves a window; `perch size <id> W H`
+  overrides its pixel size; `perch arrange` re-flows all windows.
+- `perch place` / `perch pin` take a window *out* of the grid (its row
+  closes up).
+- Saved with the workspace.
+
+## Pointer on the glasses (since 1.3)
+
+When the OS pointer is on the glasses output, perchd draws its own arrow and:
+
+- **click** a window → focus it;
+- **drag** a window → it leaves its row (the row closes up) and follows the
+  pointer; while over a row, a vertical **insertion guide** and ghost
+  outlines show where every window in that row would settle; release to
+  drop it there, or release outside any row to leave it free-floating;
+- the **control bar** along the bottom (always visible, head-locked):
+  RECENTER (gaze → yaw 0), CENTRE HERE (layout centre → current gaze),
+  ARRANGE, ROWS −/+, NEARER/FARTHER, PICK, CALIBRATE, CLEAR.
+
+Clicks *inside* a captured window do not yet reach the application behind
+it (that is M3: input routing).

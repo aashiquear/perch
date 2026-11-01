@@ -8,6 +8,7 @@ members = [
     "crates/perch-net",
     "crates/perch-input",
     "crates/perch-capture",
+    "crates/perch-ui",
     "crates/perch-compositor",
     "crates/perch-daemon",
     "crates/perch-cli",
@@ -22,6 +23,7 @@ default-members = [
     "crates/perch-proto",
     "crates/perch-tracking",
     "crates/perch-space",
+    "crates/perch-ui",
     "crates/perch-net",
     "crates/perch-hal",
     "crates/perch-cli",
@@ -46,6 +48,7 @@ perch-hal = { path = "crates/perch-hal" }
 perch-net = { path = "crates/perch-net" }
 perch-input = { path = "crates/perch-input" }
 perch-capture = { path = "crates/perch-capture" }
+perch-ui = { path = "crates/perch-ui" }
 perch-compositor = { path = "crates/perch-compositor" }
 
 # -- math / data

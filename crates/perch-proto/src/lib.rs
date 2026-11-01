@@ -28,7 +28,7 @@ use std::fmt;
 use uuid::Uuid;
 
 /// Protocol version. Bump `MAJOR` on any incompatible wire change.
-pub const PROTOCOL_VERSION: Version = Version { major: 1, minor: 2 };
+pub const PROTOCOL_VERSION: Version = Version { major: 1, minor: 3 };
 
 /// Semantic version of the wire protocol.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -249,43 +249,45 @@ pub struct Placement {
     pub height_m: f32,
 }
 
-/// A grid of slots on a sphere around the head that windows snap to. Slots
-/// are `cols × rows` cells of `cell_w_m × cell_h_m` metres separated by
-/// `gap_m`, laid out flat at `distance` and then wrapped onto the sphere
-/// (each cell centre becomes a yaw/pitch). Column 0 is leftmost, row 0 is
-/// the top. Since 1.2.
+/// Rows of windows on a sphere around the head. Each row is a flow layout:
+/// its windows sit side by side (in slot order) with `gap_m` between them,
+/// centred on `center_yaw`, and each window's width comes from its own pixel
+/// size (`px_per_m`), clamped to `max_w_m` and to the row height, so a small
+/// terminal takes less room than a big browser. Rows are stacked `row_h_m +
+/// gap_m` apart around `center_pitch`, row 0 at the top. Everything is laid
+/// flat at `distance` and wrapped onto the sphere. Since 1.3.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Grid {
-    /// Columns.
-    pub cols: u32,
-    /// Rows.
+    /// Number of rows.
     pub rows: u32,
-    /// Cell width, metres.
-    pub cell_w_m: f32,
-    /// Cell height, metres.
-    pub cell_h_m: f32,
-    /// Gap between cells, metres.
+    /// Row height, metres.
+    pub row_h_m: f32,
+    /// Gap between windows and between rows, metres.
     pub gap_m: f32,
-    /// Distance of the grid from the head, metres.
+    /// Distance of the layout from the head, metres.
     pub distance: f32,
-    /// Yaw of the grid centre, radians, + = left.
+    /// Yaw of the layout centre, radians, + = left.
     pub center_yaw: f32,
-    /// Pitch of the grid centre, radians, + = up.
+    /// Pitch of the layout centre, radians, + = up.
     pub center_pitch: f32,
+    /// Source pixels per metre: a 1920-px-wide window at 1600 px/m is 1.2 m.
+    pub px_per_m: f32,
+    /// Widest a window may be, metres.
+    pub max_w_m: f32,
 }
 
 impl Default for Grid {
     fn default() -> Self {
         Self {
-            cols: 3,
             rows: 1,
-            cell_w_m: 1.2,
-            cell_h_m: 0.8,
-            gap_m: 0.1,
+            row_h_m: 0.8,
+            gap_m: 0.08,
             distance: 2.0,
             center_yaw: 0.0,
             center_pitch: 0.0,
+            px_per_m: 1600.0,
+            max_w_m: 2.4,
         }
     }
 }
@@ -572,17 +574,28 @@ pub enum Command {
         /// New grid.
         grid: Grid,
     },
-    /// Snap a window into grid slot (`col`, `row`). Since 1.2.
+    /// Snap a window into row `row` at position `index` (0 = leftmost; past
+    /// the end appends). Other windows in the row shift to make room. Since 1.2.
     SlotWindow {
         /// Window.
         id: WindowId,
-        /// Column, 0 = leftmost.
-        col: u32,
         /// Row, 0 = top.
         row: u32,
+        /// Position within the row.
+        index: u32,
     },
-    /// Put every visible window into the grid, row-major, in z order. Since 1.2.
+    /// Put every visible window into the grid rows, in z order. Since 1.2.
     ArrangeGrid,
+    /// Tell the host the pixel size of a window's content, which sets its
+    /// size in the grid. Since 1.3.
+    SetWindowPixels {
+        /// Window.
+        id: WindowId,
+        /// Width in source pixels.
+        width: u32,
+        /// Height in source pixels.
+        height: u32,
+    },
 }
 
 /// Events the host broadcasts to controllers.
@@ -745,13 +758,13 @@ mod tests {
         assert_eq!(Message::from_json(&s).unwrap(), m);
 
         // Since 1.2.
-        let m = Message::Command(Command::SlotWindow { id, col: 2, row: 0 });
+        let m = Message::Command(Command::SlotWindow { id, row: 0, index: 2 });
         let s = m.to_json().unwrap();
         assert!(s.contains("\"cmd\":\"slot_window\""));
         assert_eq!(Message::from_json(&s).unwrap(), m);
-        let g: Grid = serde_json::from_str("{\"cols\":4}").unwrap();
-        assert_eq!(g.cols, 4);
-        assert_eq!(g.rows, Grid::default().rows);
+        let g: Grid = serde_json::from_str("{\"rows\":2}").unwrap();
+        assert_eq!(g.rows, 2);
+        assert_eq!(g.px_per_m, Grid::default().px_per_m);
 
         // Since 1.1.
         let m = Message::Command(Command::PickSources { multiple: true });

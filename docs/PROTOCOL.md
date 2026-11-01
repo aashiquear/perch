@@ -52,9 +52,10 @@ Major versions must match. If the host has a pairing token, the client's
 | `save_layout` / `load_layout` | `name` | |
 | `apply_preset` | `name`: `single`/`coding`/`gaming`/`couch` | |
 | `get_state` | — | host replies with `state` |
-| `set_grid` | `grid` | since 1.2: replace the slot grid (`cols`, `rows`, `cell_w_m`, `cell_h_m`, `gap_m`, `distance`, `center_yaw`, `center_pitch`); slotted windows are re-placed, then `state` |
-| `slot_window` | `id`, `col`, `row` | since 1.2: snap a window into a grid cell (0-based, col 0 = left, row 0 = top), keeping its aspect; evicts the previous occupant from the slot (not from space) |
-| `arrange_grid` | — | since 1.2: snap every visible window into the grid row-major in z order, then `state` |
+| `set_grid` | `grid` | since 1.2 (shape changed in 1.3): replace the layout grid (`rows`, `row_h_m`, `gap_m`, `distance`, `center_yaw`, `center_pitch`, `px_per_m`, `max_w_m`); every row is re-flowed, `window_changed` per moved window, then `state` |
+| `slot_window` | `id`, `row`, `index` | since 1.2: put a window into `row` at `index` (0 = leftmost, past the end appends); the row re-flows, `window_changed` for every window that moved |
+| `arrange_grid` | — | since 1.2: re-flow every visible window into the rows in z order, then `state` |
+| `set_window_pixels` | `id`, `width`, `height` | since 1.3: source pixel size of a window; sets its width in the grid (`px_per_m`) |
 | `pick_sources` | `multiple` | since 1.1: host opens its source picker (Linux: desktop portal); each chosen window/monitor becomes a window near the gaze (`window_changed` ×n, then `focus_changed`), or `error` if cancelled |
 
 ### Events
@@ -118,6 +119,6 @@ sending poses to that address for 10 s after the last ping.
 
 ## Versioning
 
-Current: **1.2** (1.1 + grid commands and `state.grid`; 1.1 added `pick_sources`). 
+Current: **1.3** (flow-row grid: `Grid` fields and `slot_window` arguments changed, `set_window_pixels` added; 1.2 added the grid commands and `state.grid`; 1.1 added `pick_sources`). 
 `PROTOCOL_VERSION.major` bumps on incompatible change. Add fields with
 `#[serde(default)]` to stay minor-compatible.

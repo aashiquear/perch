@@ -66,35 +66,40 @@ enum Cmd {
     Remove { id: String },
     /// Remove every window.
     Clear,
-    /// Show or change the slot grid (lengths in metres, angles in degrees).
-    /// With no options, prints it. `--arrange` also snaps every window in.
+    /// Show or change the layout grid (lengths in metres, angles in degrees).
+    /// With no options, prints it. `--arrange` also re-flows every window.
     Grid {
-        #[arg(long)]
-        cols: Option<u32>,
+        /// Number of rows.
         #[arg(long)]
         rows: Option<u32>,
-        /// Cell width.
+        /// Row height.
         #[arg(long)]
-        cell_w: Option<f32>,
-        /// Cell height.
-        #[arg(long)]
-        cell_h: Option<f32>,
+        row_h: Option<f32>,
+        /// Gap between windows / rows.
         #[arg(long)]
         gap: Option<f32>,
         #[arg(long)]
         distance: Option<f32>,
-        /// Grid centre yaw (+ = left).
+        /// Layout centre yaw (+ = left).
         #[arg(long)]
         yaw: Option<f32>,
-        /// Grid centre pitch (+ = up).
+        /// Layout centre pitch (+ = up).
         #[arg(long)]
         pitch: Option<f32>,
-        /// Snap every visible window into the grid afterwards.
+        /// Source pixels per metre (1920 px at 1600 px/m = 1.2 m wide).
+        #[arg(long)]
+        px_per_m: Option<f32>,
+        /// Widest a window may be.
+        #[arg(long)]
+        max_w: Option<f32>,
+        /// Re-flow every visible window into the rows afterwards.
         #[arg(long)]
         arrange: bool,
     },
-    /// Snap a window into grid slot COL ROW (0-based; col 0 = left, row 0 = top).
-    Slot { id: String, col: u32, row: u32 },
+    /// Put a window into ROW at position INDEX (0 = leftmost; big = append).
+    Slot { id: String, row: u32, index: u32 },
+    /// Set a window's source pixel size (drives its width in the grid).
+    Size { id: String, width: u32, height: u32 },
     /// Snap every visible window into the grid, row-major.
     Arrange,
     /// Pin a window where you're looking.
@@ -255,14 +260,14 @@ async fn main() -> anyhow::Result<()> {
             return Ok(());
         }
         Cmd::Grid {
-            cols,
             rows,
-            cell_w,
-            cell_h,
+            row_h,
             gap,
             distance,
             yaw,
             pitch,
+            px_per_m,
+            max_w,
             arrange,
         } => {
             let mut g = state.grid;
@@ -275,11 +280,11 @@ async fn main() -> anyhow::Result<()> {
                     }
                 };
             }
-            set!(cols, cols);
             set!(rows, rows);
-            set!(cell_w_m, cell_w);
-            set!(cell_h_m, cell_h);
+            set!(row_h_m, row_h);
             set!(gap_m, gap);
+            set!(px_per_m, px_per_m);
+            set!(max_w_m, max_w);
             set!(distance, distance);
             set!(center_yaw, yaw.map(f32::to_radians));
             set!(center_pitch, pitch.map(f32::to_radians));
@@ -347,10 +352,15 @@ async fn main() -> anyhow::Result<()> {
         Cmd::Remove { id } => Command::RemoveWindow {
             id: resolve_id(&id, &ids)?,
         },
-        Cmd::Slot { id, col, row } => Command::SlotWindow {
+        Cmd::Slot { id, row, index } => Command::SlotWindow {
             id: resolve_id(&id, &ids)?,
-            col,
             row,
+            index,
+        },
+        Cmd::Size { id, width, height } => Command::SetWindowPixels {
+            id: resolve_id(&id, &ids)?,
+            width,
+            height,
         },
         Cmd::Arrange => Command::ArrangeGrid,
         Cmd::Pin { id } => Command::PinHere {
@@ -481,15 +491,15 @@ async fn main() -> anyhow::Result<()> {
 fn print_grid(state: &perch_proto::State) {
     let g = &state.grid;
     println!(
-        "grid: {}×{} cells {:.2}×{:.2} m, gap {:.2} m, {:.1} m away, centre yaw {:.1}° pitch {:.1}°",
-        g.cols,
+        "grid: {} row(s) {:.2} m high, gap {:.2} m, {:.1} m away, centre yaw {:.1}° pitch {:.1}°, {:.0} px/m, max width {:.1} m",
         g.rows,
-        g.cell_w_m,
-        g.cell_h_m,
+        g.row_h_m,
         g.gap_m,
         g.distance,
         g.center_yaw.to_degrees(),
-        g.center_pitch.to_degrees()
+        g.center_pitch.to_degrees(),
+        g.px_per_m,
+        g.max_w_m
     );
 }
 

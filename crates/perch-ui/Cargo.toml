@@ -1,0 +1,8 @@
+[package]
+name = "perch-ui"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Pure, testable overlay UI for the glasses: the control bar (layout, hit-testing, RGBA rendering) and a tiny bitmap font"
+
+[dependencies]

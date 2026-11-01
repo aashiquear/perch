@@ -12,6 +12,8 @@ mod config;
 mod device;
 mod engine;
 #[cfg(feature = "render")]
+mod interact;
+#[cfg(feature = "render")]
 mod render;
 mod server;
 
@@ -86,6 +88,8 @@ fn main() -> anyhow::Result<()> {
     )));
     let dev = device::spawn(cfg.clone(), Some(paths.clone()), source);
     let backend = capture::init(cfg.peer_id);
+    // Commands from the on-glasses UI (pointer, control bar) → engine loop.
+    let (ui_tx, ui_rx) = tokio::sync::mpsc::unbounded_channel::<perch_proto::Command>();
 
     let local_sink: server::LocalSink = {
         #[cfg(all(target_os = "linux", feature = "linux-input"))]
@@ -114,7 +118,7 @@ fn main() -> anyhow::Result<()> {
         let cfg2 = cfg.clone();
         let backend2 = Arc::clone(&backend);
         std::thread::spawn(move || {
-            if let Err(e) = rt.block_on(server::run(cfg2, eng2, dev, local_sink, backend2)) {
+            if let Err(e) = rt.block_on(server::run(cfg2, eng2, dev, local_sink, backend2, ui_rx)) {
                 tracing::error!("server: {e}");
             }
             std::process::exit(0);
@@ -128,10 +132,12 @@ fn main() -> anyhow::Result<()> {
                 backend,
                 me: cfg.peer_id,
                 fps: cfg.capture.fps,
+                commands: ui_tx,
             },
         )
         .run();
     }
 
-    rt.block_on(server::run(cfg, engine, dev, local_sink, backend))
+    drop(ui_tx);
+    rt.block_on(server::run(cfg, engine, dev, local_sink, backend, ui_rx))
 }

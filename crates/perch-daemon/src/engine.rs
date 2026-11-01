@@ -214,14 +214,30 @@ impl Engine {
                 }
                 fx.push(Effect::Broadcast(Event::State(self.state())));
             }
-            Command::SlotWindow { id, col, row } => match self.ws.set_slot(id, col, row) {
-                Ok(()) => {
-                    // The evicted window (if any) is unchanged in placement, so
-                    // only this one needs announcing.
+            Command::SlotWindow { id, row, index } => match self.ws.set_slot(id, row, index) {
+                Ok(moved) => {
+                    for m in moved {
+                        if let Some(w) = self.ws.get(m) {
+                            fx.push(Effect::Broadcast(Event::WindowChanged(w.clone())));
+                        }
+                    }
+                    // Always announce the slotted window even if it did not move.
                     changed = Some(id);
                 }
                 Err(e) => fx.push(err(&e.to_string())),
             },
+            Command::SetWindowPixels { id, width, height } => {
+                if self.ws.get(id).is_none() {
+                    fx.push(err("no such window"));
+                } else {
+                    for m in self.ws.set_size_px(id, (width, height)) {
+                        if let Some(w) = self.ws.get(m) {
+                            fx.push(Effect::Broadcast(Event::WindowChanged(w.clone())));
+                        }
+                    }
+                    changed = Some(id);
+                }
+            }
             Command::ArrangeGrid => {
                 let moved = self.ws.arrange_grid();
                 for id in moved {
@@ -297,27 +313,14 @@ impl Engine {
         self.paths.as_ref()
     }
 
-    /// Add windows for freshly captured sources. Each goes into the next free
-    /// grid slot; once the grid is full the rest are placed at eye level in
-    /// the direction the user was looking when they asked to pick, fanning
-    /// out to the right, each sized from its pixel aspect ratio at
-    /// `height_m`. Sources that already have a window are skipped (restore
-    /// after restart), so this is idempotent. When real windows arrive, our
-    /// own `Virtual` placeholders (preset demos) go away first so their grid
-    /// slots are free.
+    /// Add windows for freshly captured sources. Each is appended to the
+    /// emptiest grid row, sized from its pixel size. Sources that already
+    /// have a window are skipped (restore after restart), so this is
+    /// idempotent. When real windows arrive, our own `Virtual` placeholders
+    /// (preset demos) go away first.
     pub fn add_picked_windows(&mut self, picked: Vec<(perch_proto::Source, Option<(u32, u32)>)>) -> Vec<Effect> {
-        const DISTANCE_M: f32 = 2.0;
-        const HEIGHT_M: f32 = 0.9;
-        const GAP_RAD: f32 = 0.06;
-        // Eye level, in the direction the user looked when asking to pick.
-        let gaze_yaw = self
-            .pick_yaw
-            .take()
-            .unwrap_or_else(|| perch_space::gaze_angles(&self.pose).0);
-        let gaze_pitch = 0.0;
+        self.pick_yaw = None;
         let mut fx = Vec::new();
-        let mut next_yaw = gaze_yaw;
-        let mut first = true;
         let is_new = |ws: &Workspace, s: &perch_proto::Source| !ws.windows.iter().any(|w| w.source == *s);
         if picked.iter().any(|(s, _)| is_new(&self.ws, s)) {
             let me = self.me.peer_id;
@@ -334,6 +337,7 @@ impl Engine {
                 }
             }
         }
+        let mut touched: Vec<WindowId> = Vec::new();
         for (source, size) in picked {
             if !is_new(&self.ws, &source) {
                 continue;
@@ -342,24 +346,17 @@ impl Engine {
                 Some((w, h)) if w > 0 && h > 0 => w as f32 / h as f32,
                 _ => 16.0 / 9.0,
             };
-            let width_m = HEIGHT_M * aspect;
-            let half_ang = (width_m / 2.0 / DISTANCE_M).atan();
-            let slot = self.ws.next_free_slot();
-            if slot.is_none() && !first {
-                // yaw + = left, so "to the right" is decreasing yaw.
-                next_yaw -= half_ang + GAP_RAD;
-            }
             let id = Uuid::new_v4();
             self.ws.upsert(SpatialWindow {
                 id,
                 source,
                 placement: perch_proto::Placement {
-                    yaw: next_yaw,
-                    pitch: gaze_pitch,
-                    distance: DISTANCE_M,
+                    yaw: 0.0,
+                    pitch: 0.0,
+                    distance: self.ws.grid.distance,
                     roll: 0.0,
-                    width_m,
-                    height_m: HEIGHT_M,
+                    width_m: self.ws.grid.row_h_m * aspect,
+                    height_m: self.ws.grid.row_h_m,
                 },
                 anchor: Anchor::World,
                 z: self.ws.windows.len() as i32,
@@ -367,15 +364,18 @@ impl Engine {
                 visible: true,
                 focused: false,
             });
-            match slot {
-                Some((col, row)) => {
-                    let _ = self.ws.set_slot(id, col, row);
-                }
-                None => {
-                    next_yaw -= half_ang;
-                    first = false;
-                }
+            if let Some(px) = size {
+                self.ws.sizes.insert(id, px);
             }
+            let row = self.ws.emptiest_row();
+            touched.push(id);
+            if let Ok(moved) = self.ws.set_slot(id, row, u32::MAX) {
+                touched.extend(moved);
+            }
+        }
+        touched.sort();
+        touched.dedup();
+        for id in touched {
             if let Some(w) = self.ws.get(id) {
                 fx.push(Effect::Broadcast(Event::WindowChanged(w.clone())));
             }
@@ -543,15 +543,15 @@ mod tests {
         );
         assert!(e.ws.windows.iter().all(|w| w.placement.pitch == 0.0), "eye level");
         let (a, b) = (&e.ws.windows[0], &e.ws.windows[1]);
-        assert_eq!(
-            e.ws.slots[&a.id],
-            (0, 0),
-            "first picked window takes the first free grid slot"
-        );
-        assert_eq!(e.ws.slots[&b.id], (1, 0));
+        assert_eq!(e.ws.slots[&a.id], (0, 0), "first picked window starts row 0");
+        assert_eq!(e.ws.slots[&b.id], (0, 1), "second one is appended to the row");
         assert!(
             b.placement.yaw < a.placement.yaw,
             "second window to the right (yaw + = left)"
+        );
+        assert!(
+            a.placement.width_m > b.placement.width_m,
+            "1920 px wide beats 1080 px wide"
         );
         assert!((a.placement.width_m / a.placement.height_m - 16.0 / 9.0).abs() < 1e-3);
         assert!((b.placement.width_m / b.placement.height_m - 9.0 / 16.0).abs() < 1e-3);

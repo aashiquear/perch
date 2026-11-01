@@ -32,15 +32,11 @@ pub enum SpaceError {
     /// Unknown preset.
     #[error("unknown preset: {0}")]
     UnknownPreset(String),
-    /// Slot outside the grid.
-    #[error("slot ({col}, {row}) is outside the {cols}×{rows} grid")]
+    /// Row outside the grid.
+    #[error("row {row} is outside the grid ({rows} rows)")]
     BadSlot {
-        /// Column asked for.
-        col: u32,
         /// Row asked for.
         row: u32,
-        /// Grid columns.
-        cols: u32,
         /// Grid rows.
         rows: u32,
     },
@@ -188,6 +184,21 @@ impl Projector {
             opacity: w.opacity,
             on_screen,
         })
+    }
+
+    /// World (yaw, pitch) of the ray through panel pixel (`px`, `py`) for
+    /// `pose`: the inverse of [`project`](Self::project) for a point.
+    pub fn unproject(&self, px: f32, py: f32, pose: &Pose) -> (f32, f32) {
+        let f = self.optics.focal_px();
+        let cx = self.optics.width_px as f32 / 2.0;
+        let cy = self.optics.height_px as f32 / 2.0;
+        let dir_tilted = Vector3::new((px - cx) / f, -(py - cy) / f, -1.0);
+        let untilt = UnitQuaternion::from_axis_angle(&Vector3::x_axis(), self.optics.tilt);
+        let head = untilt * dir_tilted;
+        let world = (pose.orientation * head).normalize();
+        let yaw = (-world.x).atan2(-world.z);
+        let pitch = world.y.clamp(-1.0, 1.0).asin();
+        (yaw, pitch)
     }
 
     /// Project all visible windows, back-to-front (painter's order, then z).
@@ -344,41 +355,85 @@ pub struct Workspace {
     /// The slot grid windows snap to.
     #[serde(default)]
     pub grid: Grid,
-    /// Which slot each snapped window occupies. A window placed by hand
-    /// (`place`, `pin_here`) leaves its slot.
+    /// (row, index) of each window that lives in the grid. A window placed
+    /// by hand (`place`, `pin_here`) leaves the grid.
     #[serde(default)]
     pub slots: HashMap<WindowId, (u32, u32)>,
+    /// Source pixel size per window, which sets its width in the grid.
+    #[serde(default)]
+    pub sizes: HashMap<WindowId, (u32, u32)>,
 }
 
-/// Placement of grid cell (`col`, `row`) for content with `aspect`
-/// (width/height). The window is fitted inside the cell keeping its aspect.
-pub fn grid_slot_placement(g: &Grid, col: u32, row: u32, aspect: f32) -> Placement {
-    let pitch_w = g.cell_w_m + g.gap_m;
-    let pitch_h = g.cell_h_m + g.gap_m;
-    // Flat offsets of the cell centre from the grid centre; +x right, +y up.
-    let x = (col as f32 - (g.cols.max(1) as f32 - 1.0) / 2.0) * pitch_w;
-    let y = ((g.rows.max(1) as f32 - 1.0) / 2.0 - row as f32) * pitch_h;
-    let d = g.distance.max(0.1);
-    let aspect = if aspect.is_finite() && aspect > 0.0 {
+/// What a drag would do if released now: the window joins `row` at `index`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SnapPreview {
+    /// Target row.
+    pub row: u32,
+    /// Target position in the row.
+    pub index: u32,
+    /// Where the insertion line is: a thin vertical strip at this placement.
+    pub guide: Placement,
+    /// Resulting placements of every window in the row, dragged one included.
+    pub ghosts: Vec<(WindowId, Placement)>,
+}
+
+/// Size in metres of a window in the grid: width from its source pixels
+/// (`px_per_m`), clamped to `max_w_m`; height from the aspect ratio, and if
+/// that overflows the row the window shrinks to fit. Without a pixel size the
+/// window fills the row height at `aspect`.
+pub fn grid_window_size(g: &Grid, px: Option<(u32, u32)>, aspect: f32) -> (f32, f32) {
+    let aspect = if aspect.is_finite() && aspect > 0.05 {
         aspect
     } else {
         16.0 / 9.0
     };
-    let mut width_m = g.cell_w_m.max(0.05);
-    let mut height_m = width_m / aspect;
-    if height_m > g.cell_h_m.max(0.05) {
-        height_m = g.cell_h_m.max(0.05);
-        width_m = height_m * aspect;
+    let row_h = g.row_h_m.max(0.05);
+    let (mut w, mut h) = match px {
+        Some((pw, ph)) if pw > 0 && ph > 0 => {
+            let aspect = pw as f32 / ph as f32;
+            let w = (pw as f32 / g.px_per_m.max(1.0)).clamp(0.2, g.max_w_m.max(0.2));
+            (w, w / aspect)
+        }
+        _ => (row_h * aspect, row_h),
+    };
+    if h > row_h {
+        let k = row_h / h;
+        w *= k;
+        h = row_h;
     }
-    Placement {
-        // yaw + = left, so a cell to the right (+x) has negative yaw.
-        yaw: wrap_pi(g.center_yaw - (x / d).atan()),
-        pitch: g.center_pitch + (y / d).atan(),
-        distance: d,
-        roll: 0.0,
-        width_m,
-        height_m,
-    }
+    (w, h)
+}
+
+/// Pitch of a grid row's centre line.
+pub fn grid_row_pitch(g: &Grid, row: u32) -> f32 {
+    let rows = g.rows.max(1) as f32;
+    let y = ((rows - 1.0) / 2.0 - row as f32) * (g.row_h_m + g.gap_m);
+    g.center_pitch + (y / g.distance.max(0.1)).atan()
+}
+
+/// Flat x (metres, + = right) on the layout plane for a world yaw.
+fn grid_x_for_yaw(g: &Grid, yaw: f32) -> f32 {
+    g.distance.max(0.1) * wrap_pi(g.center_yaw - yaw).tan()
+}
+
+/// World yaw for a flat x on the layout plane.
+fn grid_yaw_for_x(g: &Grid, x: f32) -> f32 {
+    wrap_pi(g.center_yaw - (x / g.distance.max(0.1)).atan())
+}
+
+/// Lay `widths` (metres, in order) side by side centred on 0; returns each
+/// centre x.
+fn flow_centres(widths: &[f32], gap: f32) -> Vec<f32> {
+    let total: f32 = widths.iter().sum::<f32>() + gap * widths.len().saturating_sub(1) as f32;
+    let mut x = -total / 2.0;
+    widths
+        .iter()
+        .map(|w| {
+            let c = x + w / 2.0;
+            x += w + gap;
+            c
+        })
+        .collect()
 }
 
 impl Workspace {
@@ -412,9 +467,13 @@ impl Workspace {
         self.sync_focus_flags();
     }
 
-    /// Remove a window.
+    /// Remove a window. Its grid row closes up.
     pub fn remove(&mut self, id: WindowId) -> Result<(), SpaceError> {
-        self.slots.remove(&id);
+        let row = self.slots.remove(&id).map(|(r, _)| r);
+        self.sizes.remove(&id);
+        if let Some(r) = row {
+            self.relayout_row(r);
+        }
         let before = self.windows.len();
         self.windows.retain(|w| w.id != id);
         if self.windows.len() == before {
@@ -430,7 +489,7 @@ impl Workspace {
 
     /// Move/resize.
     pub fn place(&mut self, id: WindowId, p: Placement) -> Result<(), SpaceError> {
-        self.slots.remove(&id);
+        self.begin_drag(id);
         self.get_mut(id)?.placement = p;
         if let Some(f) = self.followers.get_mut(&id) {
             f.yaw = p.yaw;
@@ -442,7 +501,7 @@ impl Workspace {
     /// Pin the window at the current gaze direction (keeps size/distance).
     pub fn pin_here(&mut self, id: WindowId, pose: &Pose) -> Result<(), SpaceError> {
         let (yaw, pitch) = gaze_angles(pose);
-        self.slots.remove(&id);
+        self.begin_drag(id);
         let w = self.get_mut(id)?;
         w.placement.yaw = yaw;
         w.placement.pitch = pitch;
@@ -451,78 +510,213 @@ impl Workspace {
         Ok(())
     }
 
-    /// Replace the grid and re-place every slotted window.
+    /// Replace the grid and re-lay every row. Rows that no longer exist
+    /// fold into the last one. Returns the ids whose placement changed.
     pub fn set_grid(&mut self, grid: Grid) -> Vec<WindowId> {
         self.grid = grid;
-        let ids: Vec<WindowId> = self.slots.keys().copied().collect();
-        let mut changed = Vec::new();
-        for id in ids {
-            let (col, row) = self.slots[&id];
-            if col < grid.cols && row < grid.rows {
-                if self.snap(id, col, row).is_ok() {
-                    changed.push(id);
-                }
-            } else {
-                self.slots.remove(&id);
+        let last = grid.rows.max(1) - 1;
+        for (row, _) in self.slots.values_mut() {
+            if *row > last {
+                *row = last;
             }
         }
-        changed
+        self.relayout_all()
     }
 
-    /// Snap window `id` into slot (`col`, `row`), keeping its aspect ratio.
-    pub fn set_slot(&mut self, id: WindowId, col: u32, row: u32) -> Result<(), SpaceError> {
-        if col >= self.grid.cols || row >= self.grid.rows {
+    /// Record the source pixel size of a window (drives its grid width).
+    pub fn set_size_px(&mut self, id: WindowId, px: (u32, u32)) -> Vec<WindowId> {
+        self.sizes.insert(id, px);
+        match self.slots.get(&id) {
+            Some(&(row, _)) => self.relayout_row(row),
+            None => Vec::new(),
+        }
+    }
+
+    /// Put window `id` into `row` at `index` (0 = leftmost; past the end
+    /// appends). Others in the row shift. Returns every id that moved.
+    pub fn set_slot(&mut self, id: WindowId, row: u32, index: u32) -> Result<Vec<WindowId>, SpaceError> {
+        if row >= self.grid.rows.max(1) {
             return Err(SpaceError::BadSlot {
-                col,
                 row,
-                cols: self.grid.cols,
                 rows: self.grid.rows,
             });
         }
         self.get(id).ok_or(SpaceError::NoSuchWindow)?;
-        // One window per slot: evict whoever was there.
-        self.slots.retain(|other, s| *other == id || *s != (col, row));
-        self.snap(id, col, row)
-    }
-
-    fn snap(&mut self, id: WindowId, col: u32, row: u32) -> Result<(), SpaceError> {
-        let grid = self.grid;
-        let w = self.get_mut(id)?;
-        let aspect = w.placement.width_m / w.placement.height_m.max(1e-3);
-        w.placement = grid_slot_placement(&grid, col, row, aspect);
-        w.anchor = Anchor::World;
+        let old_row = self.slots.remove(&id).map(|(r, _)| r);
+        let mut members = self.row_members(row);
+        let index = (index as usize).min(members.len());
+        members.insert(index, id);
+        for (i, m) in members.iter().enumerate() {
+            self.slots.insert(*m, (row, i as u32));
+        }
         self.followers.remove(&id);
-        self.slots.insert(id, (col, row));
-        Ok(())
+        let mut moved = self.relayout_row(row);
+        if let Some(r) = old_row.filter(|r| *r != row) {
+            moved.extend(self.relayout_row(r));
+        }
+        Ok(moved)
     }
 
-    /// First free slot in row-major order, if any.
-    pub fn next_free_slot(&self) -> Option<(u32, u32)> {
-        let taken: std::collections::HashSet<(u32, u32)> = self
+    /// Windows of `row`, left to right.
+    pub fn row_members(&self, row: u32) -> Vec<WindowId> {
+        let mut v: Vec<(u32, WindowId)> = self
             .slots
             .iter()
-            .filter(|(id, _)| self.get(**id).is_some())
-            .map(|(_, s)| *s)
+            .filter(|(id, (r, _))| *r == row && self.get(**id).is_some())
+            .map(|(id, (_, i))| (*i, *id))
             .collect();
-        (0..self.grid.rows)
-            .flat_map(|row| (0..self.grid.cols).map(move |col| (col, row)))
-            .find(|s| !taken.contains(s))
+        v.sort();
+        v.into_iter().map(|(_, id)| id).collect()
     }
 
-    /// Put every visible window into the grid, row-major, in z order. Windows
-    /// that don't fit are left where they are. Returns the ids that moved.
+    fn window_size(&self, id: WindowId) -> (f32, f32) {
+        let aspect = self
+            .get(id)
+            .map(|w| w.placement.width_m / w.placement.height_m.max(1e-3))
+            .unwrap_or(16.0 / 9.0);
+        grid_window_size(&self.grid, self.sizes.get(&id).copied(), aspect)
+    }
+
+    /// Placements a row would have with exactly these members, in order.
+    fn row_layout(&self, row: u32, members: &[WindowId]) -> Vec<(WindowId, Placement)> {
+        let g = self.grid;
+        let sizes: Vec<(f32, f32)> = members.iter().map(|id| self.window_size(*id)).collect();
+        let widths: Vec<f32> = sizes.iter().map(|s| s.0).collect();
+        let centres = flow_centres(&widths, g.gap_m);
+        let pitch = grid_row_pitch(&g, row);
+        members
+            .iter()
+            .zip(sizes.iter().zip(centres.iter()))
+            .map(|(id, ((w, h), x))| {
+                (
+                    *id,
+                    Placement {
+                        yaw: grid_yaw_for_x(&g, *x),
+                        pitch,
+                        distance: g.distance.max(0.1),
+                        roll: 0.0,
+                        width_m: *w,
+                        height_m: *h,
+                    },
+                )
+            })
+            .collect()
+    }
+
+    fn relayout_row(&mut self, row: u32) -> Vec<WindowId> {
+        let members = self.row_members(row);
+        for (i, m) in members.iter().enumerate() {
+            self.slots.insert(*m, (row, i as u32));
+        }
+        let layout = self.row_layout(row, &members);
+        let mut moved = Vec::new();
+        for (id, p) in layout {
+            if let Ok(w) = self.get_mut(id) {
+                if w.placement != p || w.anchor != Anchor::World {
+                    w.placement = p;
+                    w.anchor = Anchor::World;
+                    moved.push(id);
+                }
+            }
+            self.followers.remove(&id);
+        }
+        moved
+    }
+
+    fn relayout_all(&mut self) -> Vec<WindowId> {
+        let rows: std::collections::BTreeSet<u32> = self.slots.values().map(|(r, _)| *r).collect();
+        let mut moved = Vec::new();
+        for r in rows {
+            moved.extend(self.relayout_row(r));
+        }
+        moved
+    }
+
+    /// Row with the least content, for a new window.
+    pub fn emptiest_row(&self) -> u32 {
+        (0..self.grid.rows.max(1))
+            .min_by(|a, b| {
+                let wa: f32 = self.row_members(*a).iter().map(|id| self.window_size(*id).0).sum();
+                let wb: f32 = self.row_members(*b).iter().map(|id| self.window_size(*id).0).sum();
+                wa.partial_cmp(&wb).unwrap_or(std::cmp::Ordering::Equal)
+            })
+            .unwrap_or(0)
+    }
+
+    /// Put every visible window into the rows, in z order, filling each row
+    /// up to about 100° before starting the next (the last row takes the
+    /// rest). Returns the ids that moved.
     pub fn arrange_grid(&mut self) -> Vec<WindowId> {
         self.slots.clear();
         let mut ids: Vec<(i32, WindowId)> = self.windows.iter().filter(|w| w.visible).map(|w| (w.z, w.id)).collect();
         ids.sort();
-        let mut moved = Vec::new();
+        let max_row_w = 2.0 * self.grid.distance.max(0.1) * 50f32.to_radians().tan();
+        let rows = self.grid.rows.max(1);
+        let (mut row, mut used) = (0u32, 0.0f32);
         for (_, id) in ids {
-            let Some((col, row)) = self.next_free_slot() else { break };
-            if self.snap(id, col, row).is_ok() {
-                moved.push(id);
+            let (w, _) = self.window_size(id);
+            if used > 0.0 && used + self.grid.gap_m + w > max_row_w && row + 1 < rows {
+                row += 1;
+                used = 0.0;
             }
+            let n = self.row_members(row).len() as u32;
+            self.slots.insert(id, (row, n));
+            used += w + if n > 0 { self.grid.gap_m } else { 0.0 };
         }
-        moved
+        self.relayout_all()
+    }
+
+    /// Take a window out of the grid (the row closes up) so it can be moved
+    /// freely. Returns the ids that moved.
+    pub fn begin_drag(&mut self, id: WindowId) -> Vec<WindowId> {
+        match self.slots.remove(&id) {
+            Some((row, _)) => self.relayout_row(row),
+            None => Vec::new(),
+        }
+    }
+
+    /// Move a window's centre to (`yaw`, `pitch`) without touching the grid
+    /// (used while dragging).
+    pub fn drag_update(&mut self, id: WindowId, yaw: f32, pitch: f32) -> Result<(), SpaceError> {
+        let w = self.get_mut(id)?;
+        w.placement.yaw = wrap_pi(yaw);
+        w.placement.pitch = pitch;
+        w.anchor = Anchor::World;
+        Ok(())
+    }
+
+    /// If a window whose centre is at (`yaw`, `pitch`) were dropped now,
+    /// would it snap into a row? `None` when the pointer is outside every
+    /// row band (the window then stays where it is dropped, free).
+    pub fn drag_preview(&self, id: WindowId, yaw: f32, pitch: f32) -> Option<SnapPreview> {
+        let g = self.grid;
+        let band = ((g.row_h_m * 0.75) / g.distance.max(0.1)).atan();
+        let row = (0..g.rows.max(1)).find(|r| (grid_row_pitch(&g, *r) - pitch).abs() <= band)?;
+        let members: Vec<WindowId> = self.row_members(row).into_iter().filter(|m| *m != id).collect();
+        let x = grid_x_for_yaw(&g, yaw);
+        let current = self.row_layout(row, &members);
+        let index = current.iter().filter(|(_, p)| grid_x_for_yaw(&g, p.yaw) < x).count();
+        let mut with: Vec<WindowId> = members.clone();
+        with.insert(index, id);
+        let ghosts = self.row_layout(row, &with);
+        // The insertion line sits at the dragged window's left edge in the
+        // new layout.
+        let (_, target) = ghosts[index];
+        let left_x = grid_x_for_yaw(&g, target.yaw) - target.width_m / 2.0 - g.gap_m / 2.0;
+        let guide = Placement {
+            yaw: grid_yaw_for_x(&g, left_x),
+            pitch: grid_row_pitch(&g, row),
+            distance: g.distance.max(0.1),
+            roll: 0.0,
+            width_m: 0.012,
+            height_m: g.row_h_m * 1.15,
+        };
+        Some(SnapPreview {
+            row,
+            index: index as u32,
+            guide,
+            ghosts,
+        })
     }
 
     /// Change the anchor behaviour of a window.
@@ -865,67 +1059,116 @@ mod tests {
     }
 
     #[test]
-    fn grid_slots_map_left_right_up_down_and_keep_aspect() {
-        let g = Grid {
-            cols: 3,
-            rows: 2,
-            ..Default::default()
-        };
-        let left = grid_slot_placement(&g, 0, 0, 16.0 / 9.0);
-        let mid = grid_slot_placement(&g, 1, 0, 16.0 / 9.0);
-        let right = grid_slot_placement(&g, 2, 1, 16.0 / 9.0);
+    fn grid_sizes_follow_source_pixels_and_fit_the_row() {
+        let g = Grid::default();
+        let (w1, h1) = grid_window_size(&g, Some((1920, 1080)), 1.0);
+        let (w2, h2) = grid_window_size(&g, Some((960, 1080)), 1.0);
+        assert!((w1 - 1.2).abs() < 1e-4, "1920 px at 1600 px/m = 1.2 m");
+        assert!((w2 / w1 - 0.5).abs() < 1e-4, "half the pixels, half the width");
+        assert!((w1 / h1 - 16.0 / 9.0).abs() < 1e-3 && (w2 / h2 - 960.0 / 1080.0).abs() < 1e-3);
+        let (_, h3) = grid_window_size(&g, Some((1000, 4000)), 1.0);
         assert!(
-            left.yaw > 0.0 && right.yaw < 0.0,
-            "col 0 is left (+yaw), col 2 is right"
+            (h3 - g.row_h_m).abs() < 1e-6,
+            "tall content is limited to the row height"
         );
-        assert!(mid.yaw.abs() < 1e-6, "middle column is straight ahead");
-        assert!(
-            left.pitch > 0.0 && right.pitch < 0.0,
-            "row 0 is up (+pitch), row 1 is down"
-        );
-        assert!((left.width_m / left.height_m - 16.0 / 9.0).abs() < 1e-4);
-        assert!(left.width_m <= g.cell_w_m + 1e-6 && left.height_m <= g.cell_h_m + 1e-6);
-        let tall = grid_slot_placement(&g, 0, 0, 0.5);
-        assert!(
-            (tall.height_m - g.cell_h_m).abs() < 1e-6,
-            "tall content is height-limited"
-        );
-        // Symmetric: col 0 and col 2 mirror each other on the same row.
-        let r0 = grid_slot_placement(&g, 2, 0, 1.0);
-        assert!((left.yaw + r0.yaw).abs() < 1e-5);
+        let (w4, h4) = grid_window_size(&g, None, 2.0);
+        assert!((h4 - g.row_h_m).abs() < 1e-6 && (w4 - 2.0 * g.row_h_m).abs() < 1e-6);
+        assert!(grid_row_pitch(&Grid { rows: 2, ..g }, 0) > 0.0, "row 0 is up");
+        assert!(grid_row_pitch(&Grid { rows: 2, ..g }, 1) < 0.0);
     }
 
     #[test]
-    fn workspace_grid_arrange_slot_and_manual_place() {
+    fn rows_flow_left_to_right_centred_and_reorder_on_slot_and_drag() {
         let peer = Uuid::nil();
         let mut ws = Workspace::new();
         ws.apply_preset("coding", peer).unwrap();
+        let ids: Vec<WindowId> = ws.windows.iter().map(|w| w.id).collect();
+        ws.set_size_px(ids[0], (1920, 1080));
+        ws.set_size_px(ids[1], (960, 1080));
+        ws.set_size_px(ids[2], (960, 1080));
         let moved = ws.arrange_grid();
         assert_eq!(moved.len(), 3);
-        assert_eq!(ws.next_free_slot(), None, "3-col grid full");
-        let ids: Vec<WindowId> = ws.windows.iter().map(|w| w.id).collect();
-        assert_eq!(ws.slots[&ids[0]], (0, 0));
-        assert!(ws.windows[0].placement.yaw > ws.windows[2].placement.yaw);
-        // Move window 0 to the right slot: it evicts window 2 from that slot.
-        ws.set_slot(ids[0], 2, 0).unwrap();
-        assert_eq!(ws.slots[&ids[0]], (2, 0));
-        assert!(!ws.slots.contains_key(&ids[2]));
-        assert!(matches!(ws.set_slot(ids[0], 5, 0), Err(SpaceError::BadSlot { .. })));
-        // Manual placement leaves the grid.
+        assert_eq!(ws.row_members(0), ids, "z order, single row");
+        let yaws: Vec<f32> = ids.iter().map(|id| ws.get(*id).unwrap().placement.yaw).collect();
+        assert!(
+            yaws[0] > yaws[1] && yaws[1] > yaws[2],
+            "left to right is decreasing yaw"
+        );
+        let widths: Vec<f32> = ids.iter().map(|id| ws.get(*id).unwrap().placement.width_m).collect();
+        assert!(
+            (widths[0] / widths[1] - 2.0).abs() < 1e-3,
+            "big window gets twice the space"
+        );
+        // Row is centred: flat x of leftmost edge == -(rightmost edge).
+        let g = ws.grid;
+        let left = grid_x_for_yaw(&g, yaws[0]) - widths[0] / 2.0;
+        let right = grid_x_for_yaw(&g, yaws[2]) + widths[2] / 2.0;
+        assert!((left + right).abs() < 1e-3);
+        // Move the big window to the end; the others shift left.
+        ws.set_slot(ids[0], 0, 99).unwrap();
+        assert_eq!(ws.row_members(0), vec![ids[1], ids[2], ids[0]]);
+        assert!(ws.get(ids[0]).unwrap().placement.yaw < ws.get(ids[2]).unwrap().placement.yaw);
+        assert!(matches!(ws.set_slot(ids[0], 3, 0), Err(SpaceError::BadSlot { .. })));
+        // Drag it out: the row closes up and is re-centred.
+        ws.begin_drag(ids[0]);
+        assert_eq!(ws.row_members(0), vec![ids[1], ids[2]]);
+        let y1 = ws.get(ids[1]).unwrap().placement.yaw;
+        let y2 = ws.get(ids[2]).unwrap().placement.yaw;
+        assert!((y1 + y2).abs() < 1e-4, "two equal windows straddle the centre");
+        // Preview: pointer far left in the row band → index 0 with a guide left of everything.
+        let far_left = grid_yaw_for_x(&g, -3.0);
+        let p = ws.drag_preview(ids[0], far_left, 0.0).unwrap();
+        assert_eq!((p.row, p.index), (0, 0));
+        assert_eq!(p.ghosts.len(), 3);
+        assert!(p.guide.yaw > p.ghosts[0].1.yaw, "guide line left of the first window");
+        // Between the two → index 1; outside the row band → no snap.
+        let mid = ws.drag_preview(ids[0], 0.0, 0.0).unwrap();
+        assert_eq!(mid.index, 1);
+        assert!(ws.drag_preview(ids[0], 0.0, 0.6).is_none());
+        // Drop at the preview's slot.
+        ws.set_slot(ids[0], mid.row, mid.index).unwrap();
+        assert_eq!(ws.row_members(0), vec![ids[1], ids[0], ids[2]]);
+        // Manual placement leaves the grid; shrinking the grid folds rows.
         ws.place(ids[0], place(0.1, 0.1, 2.0, 1.0, 0.5)).unwrap();
         assert!(!ws.slots.contains_key(&ids[0]));
-        // Changing the grid re-places slotted windows and drops out-of-range ones.
+        ws.set_slot(ids[0], 0, 0).unwrap();
+        ws.set_grid(Grid { rows: 2, ..g });
         ws.set_slot(ids[1], 1, 0).unwrap();
-        let changed = ws.set_grid(Grid {
-            cols: 1,
-            rows: 1,
-            ..Default::default()
-        });
-        assert!(changed.is_empty());
-        assert!(ws.slots.is_empty(), "slot (1,0) no longer exists");
-        // Persisted.
+        ws.set_grid(Grid { rows: 1, ..g });
+        assert_eq!(ws.row_members(0).len(), 3, "row 1 folded into row 0");
         let back = Workspace::from_json(&ws.to_json()).unwrap();
-        assert_eq!(back.grid.cols, 1);
+        assert_eq!(back.sizes[&ids[0]], (1920, 1080));
+        assert_eq!(back.slots.len(), 3);
+    }
+
+    #[test]
+    fn unproject_inverts_project_at_window_centre() {
+        let pr = Projector::new(DisplayOptics::rokid_max_1080p());
+        let pose = Pose {
+            orientation: UnitQuaternion::from_axis_angle(&Vector3::y_axis(), 0.4)
+                * UnitQuaternion::from_axis_angle(&Vector3::x_axis(), -0.2),
+            ..Pose::identity()
+        };
+        let w = SpatialWindow {
+            id: Uuid::nil(),
+            source: Source::Virtual {
+                peer: Uuid::nil(),
+                width: 1,
+                height: 1,
+            },
+            placement: place(0.3, -0.1, 2.0, 0.4, 0.3),
+            anchor: Anchor::World,
+            z: 0,
+            opacity: 1.0,
+            visible: true,
+            focused: false,
+        };
+        let q = pr.project(&w, &pose).unwrap();
+        let cx = q.corners.iter().map(|c| c.x).sum::<f32>() / 4.0;
+        let cy = q.corners.iter().map(|c| c.y).sum::<f32>() / 4.0;
+        let (yaw, pitch) = pr.unproject(cx, cy, &pose);
+        assert!((yaw - 0.3).abs() < 0.01, "yaw {yaw}");
+        assert!((pitch + 0.1).abs() < 0.01, "pitch {pitch}");
     }
 
     #[test]

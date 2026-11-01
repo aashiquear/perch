@@ -74,6 +74,7 @@ pub async fn run(
     mut dev: DeviceHandle,
     mut local_sink: LocalSink,
     backend: SharedBackend,
+    mut ui_rx: mpsc::UnboundedReceiver<perch_proto::Command>,
 ) -> anyhow::Result<()> {
     let (server, mut inbound) = ControlServer::new(self_hello(&cfg));
     let server = if cfg.pairing_token.is_empty() {
@@ -214,6 +215,11 @@ pub async fn run(
             }
             Some(evs) = stream_in_rx.recv() => {
                 let fx = engine.lock().await.input(evs);
+                apply_effects(fx, &server, &dev, &mut local_sink, &engine, &backend, &pick_tx).await;
+            }
+            Some(cmd) = ui_rx.recv() => {
+                let me = cfg.peer_id;
+                let fx = engine.lock().await.command(me, cmd);
                 apply_effects(fx, &server, &dev, &mut local_sink, &engine, &backend, &pick_tx).await;
             }
             Some(outcome) = pick_rx.recv() => {

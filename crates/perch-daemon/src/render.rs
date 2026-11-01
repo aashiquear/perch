@@ -4,6 +4,7 @@
 
 use crate::capture::SharedBackend;
 use crate::engine::Engine;
+use crate::interact::{FrameCtx, Interaction};
 use perch_capture::{CaptureError, CaptureSource, TestPattern};
 use perch_compositor::{find_glasses_monitor, Compositor, Stereo};
 use perch_proto::{DisplayMode, Source, WindowId};
@@ -24,6 +25,8 @@ pub struct CaptureSetup {
     pub me: uuid::Uuid,
     /// Requested capture rate.
     pub fps: u32,
+    /// Where pointer/bar interactions send their commands.
+    pub commands: tokio::sync::mpsc::UnboundedSender<perch_proto::Command>,
 }
 
 /// Everything the render loop needs.
@@ -42,107 +45,10 @@ pub struct RenderApp {
     capture: CaptureSetup,
     last_frame: Instant,
     stats: FrameStats,
-    /// Pointer position on the glasses panel while the OS pointer is on our
-    /// output (GNOME lets it wander off the laptop screen; we hide the OS
-    /// cursor and draw our own so the user can find it and bring it back).
-    cursor: Option<(f32, f32)>,
-    cursor_uploaded: bool,
-}
-
-/// Layer id for the pointer overlay.
-const CURSOR_ID: WindowId = uuid::Uuid::from_u128(0x7065_7263_685f_6375_7273_6f72_0000_0001);
-const CURSOR_W: u32 = 24;
-const CURSOR_H: u32 = 32;
-
-/// A white arrow with a black outline, as an RGBA frame.
-fn cursor_frame() -> perch_capture::Frame {
-    let (w, h) = (CURSOR_W as i32, CURSOR_H as i32);
-    let mut data = vec![0u8; (w * h * 4) as usize];
-    // Arrow polygon in a 24×32 box: tip top-left, classic shape.
-    let inside = |x: f32, y: f32| -> bool {
-        let poly = [
-            (1.0, 1.0),
-            (1.0, 24.0),
-            (7.0, 19.0),
-            (11.0, 29.0),
-            (15.0, 27.0),
-            (11.0, 17.0),
-            (19.0, 17.0),
-        ];
-        let mut c = false;
-        let n = poly.len();
-        let mut j = n - 1;
-        for i in 0..n {
-            let (xi, yi) = poly[i];
-            let (xj, yj) = poly[j];
-            if ((yi > y) != (yj > y)) && (x < (xj - xi) * (y - yi) / (yj - yi) + xi) {
-                c = !c;
-            }
-            j = i;
-        }
-        c
-    };
-    for y in 0..h {
-        for x in 0..w {
-            let (fx, fy) = (x as f32 + 0.5, y as f32 + 0.5);
-            let i = ((y * w + x) * 4) as usize;
-            if inside(fx, fy) {
-                data[i..i + 4].copy_from_slice(&[255, 255, 255, 255]);
-            } else {
-                // Outline: any neighbour inside.
-                let edge = [
-                    (-1.0, 0.0),
-                    (1.0, 0.0),
-                    (0.0, -1.0),
-                    (0.0, 1.0),
-                    (-1.0, -1.0),
-                    (1.0, 1.0),
-                    (-1.0, 1.0),
-                    (1.0, -1.0),
-                ]
-                .iter()
-                .any(|(dx, dy)| inside(fx + dx, fy + dy));
-                if edge {
-                    data[i..i + 4].copy_from_slice(&[0, 0, 0, 255]);
-                }
-            }
-        }
-    }
-    perch_capture::Frame::Rgba {
-        width: CURSOR_W,
-        height: CURSOR_H,
-        stride: CURSOR_W * 4,
-        format: perch_capture::PixelFormat::Rgba8,
-        data: data.into(),
-        t_us: 0,
-    }
-}
-
-fn with_cursor(mut quads: Vec<perch_space::ScreenQuad>, cursor: Option<(f32, f32)>) -> Vec<perch_space::ScreenQuad> {
-    if let Some((x, y)) = cursor {
-        quads.push(cursor_quad(x, y, 0.0));
-    }
-    quads
-}
-
-/// Screen-space quad for the pointer at panel pixel (x, y), drawn on top.
-fn cursor_quad(x: f32, y: f32, x_shift: f32) -> perch_space::ScreenQuad {
-    use nalgebra::Point2;
-    let (w, h) = (CURSOR_W as f32, CURSOR_H as f32);
-    let x = x + x_shift;
-    perch_space::ScreenQuad {
-        id: CURSOR_ID,
-        corners: [
-            Point2::new(x, y),
-            Point2::new(x + w, y),
-            Point2::new(x + w, y + h),
-            Point2::new(x, y + h),
-        ],
-        depth: 0.0,
-        z: i32::MAX,
-        opacity: 1.0,
-        on_screen: true,
-    }
+    /// Pointer, drag and control-bar state.
+    interact: Interaction,
+    /// What the last frame used, for hit-testing pointer events.
+    ctx: Option<FrameCtx>,
 }
 
 /// Rolling frame-time statistics, logged every few seconds so "it feels
@@ -187,6 +93,7 @@ impl RenderApp {
         ipd_m: f32,
         capture: CaptureSetup,
     ) -> Self {
+        let capture_commands = capture.commands.clone();
         Self {
             engine,
             tracker,
@@ -199,8 +106,8 @@ impl RenderApp {
             capture,
             last_frame: Instant::now(),
             stats: FrameStats::default(),
-            cursor: None,
-            cursor_uploaded: false,
+            interact: Interaction::new(capture_commands),
+            ctx: None,
         }
     }
 
@@ -284,10 +191,17 @@ impl RenderApp {
         // Predicted pose for this frame.
         let pose = self.tracker.lock().unwrap().pose_predicted(0.0);
 
-        let (windows, projector, mode) = {
+        let (windows, projector, mode, grid, drag_overlay) = {
             let mut e = self.engine.blocking_lock();
             e.set_pose(pose);
-            (e.windows_for_render(dt), e.projector, e.display_mode)
+            let drag_overlay = self.interact.drag_overlay(&e);
+            (
+                e.windows_for_render(dt),
+                e.projector,
+                e.display_mode,
+                e.ws.grid,
+                drag_overlay,
+            )
         };
         self.ensure_sources(&windows);
         let comp = self.comp.as_mut().expect("checked above");
@@ -310,23 +224,37 @@ impl RenderApp {
                 .insert(id, Instant::now() - std::time::Duration::from_secs(60));
         }
 
-        if self.cursor.is_some() && !self.cursor_uploaded {
-            comp.upload(CURSOR_ID, &cursor_frame());
-            self.cursor_uploaded = true;
-        }
-        let cursor = self.cursor;
         let stereo = matches!(mode, Some(DisplayMode::Stereo) | Some(DisplayMode::Stereo120));
         let ws_tmp = perch_space::Workspace {
-            windows: windows.clone(),
+            windows,
             ..Default::default()
         };
+        // Real windows first (these are what the pointer can grab) …
+        let base = projector.project_all(&ws_tmp, &pose);
+        let panel = (projector.optics.width_px, projector.optics.height_px);
+        self.ctx = Some(FrameCtx {
+            pose,
+            projector,
+            panel,
+            stereo,
+            quads: base.clone(),
+        });
+        // … then world-anchored overlay (drag ghosts + guide) …
+        let mut world = base;
+        for g in &drag_overlay {
+            if let Some(q) = projector.project(g, &pose) {
+                world.push(q);
+            }
+        }
+        // … then screen-space overlay (bar, pointer) per eye.
+        let ctx = self.ctx.clone().expect("just set");
+        let screen = self.interact.screen_overlay(&ctx, grid.rows, grid.distance, comp);
         let res = if stereo {
             if let Stereo::SideBySide { ipd_m } = self.stereo {
                 // Parallax: shift each eye's view by ±ipd/2 horizontally. For a
                 // 3DOF renderer this is a yaw-independent translation of the
                 // projected quad by f * (ipd/2) / distance pixels.
                 let f = projector.optics.focal_px();
-                let base = projector.project_all(&ws_tmp, &pose);
                 let shift = |q: &perch_space::ScreenQuad, sign: f32| {
                     let mut q = *q;
                     let dx = sign * f * (ipd_m / 2.0) / q.depth.max(0.1);
@@ -335,30 +263,34 @@ impl RenderApp {
                     }
                     q
                 };
-                let mut left: Vec<_> = base.iter().map(|q| shift(q, 0.5)).collect();
-                let mut right: Vec<_> = base
+                let half = projector.optics.width_px as f32 / 2.0;
+                let mut left: Vec<_> = world.iter().map(|q| shift(q, 0.5)).collect();
+                let mut right: Vec<_> = world
                     .iter()
                     .map(|q| {
                         let mut r = shift(q, -0.5);
                         for c in &mut r.corners {
-                            c.x += projector.optics.width_px as f32;
+                            c.x += half;
                         }
                         r
                     })
                     .collect();
-                if let Some((x, y)) = cursor {
-                    // The OS pointer lives on the full panel; show it in the eye it is in.
-                    let half = projector.optics.width_px as f32 / 2.0;
-                    let (xl, shift_r) = if x < half { (x, half) } else { (x - half, half) };
-                    left.push(cursor_quad(xl, y, 0.0));
-                    right.push(cursor_quad(xl, y, shift_r));
+                for q in &screen {
+                    left.push(*q);
+                    let mut r = *q;
+                    for c in &mut r.corners {
+                        c.x += half;
+                    }
+                    right.push(r);
                 }
                 comp.render_stereo(&left, &right)
             } else {
-                comp.render(&with_cursor(projector.project_all(&ws_tmp, &pose), cursor))
+                world.extend(screen);
+                comp.render(&world)
             }
         } else {
-            comp.render(&with_cursor(projector.project_all(&ws_tmp, &pose), cursor))
+            world.extend(screen);
+            comp.render(&world)
         };
         if let Err(e) = res {
             tracing::warn!("render: {e}");
@@ -423,9 +355,27 @@ impl ApplicationHandler for RenderApp {
                 }
             }
             WindowEvent::CursorMoved { position, .. } => {
-                self.cursor = Some((position.x as f32, position.y as f32));
+                if let Some(ctx) = self.ctx.clone() {
+                    let mut e = self.engine.blocking_lock();
+                    self.interact
+                        .cursor_moved(position.x as f32, position.y as f32, &ctx, &mut e);
+                }
             }
-            WindowEvent::CursorLeft { .. } => self.cursor = None,
+            WindowEvent::CursorLeft { .. } => {
+                let mut e = self.engine.blocking_lock();
+                self.interact.cursor_left(&mut e);
+            }
+            WindowEvent::MouseInput {
+                state,
+                button: winit::event::MouseButton::Left,
+                ..
+            } => {
+                if let Some(ctx) = self.ctx.clone() {
+                    let mut e = self.engine.blocking_lock();
+                    self.interact
+                        .button(state == winit::event::ElementState::Pressed, &ctx, &mut e);
+                }
+            }
             _ => {}
         }
     }
