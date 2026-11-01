@@ -152,12 +152,21 @@ pub trait CaptureBackend: Send {
         false
     }
 
+    /// Move the host's focused window onto a new glasses display of this
+    /// size. Backends without virtual displays fall back to [`pick`].
+    ///
+    /// [`pick`]: CaptureBackend::pick
+    fn send_window(&mut self, _width: u32, _height: u32) -> Result<Vec<Source>, CaptureError> {
+        self.pick(false)
+    }
+
     /// A spatial window showing `source` was removed; backends that created
     /// something for it (a virtual monitor) tear it down so its apps return.
     fn release(&mut self, _source: &Source) {}
 
     /// The user released the input grab: bring the OS pointer back onto a
-    /// physical display if the backend parked it on a virtual one.
+    /// physical display if the backend parked it on a virtual one, and let go
+    /// of every key the backend still holds down.
     fn release_pointer(&mut self) {}
 
     /// Close platform sessions cleanly before exit. Portals persist the

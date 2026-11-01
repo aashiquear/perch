@@ -62,6 +62,16 @@ enum Cmd {
         #[arg(long)]
         multiple: bool,
     },
+    /// Move the host's focused window onto a new glasses display (GNOME:
+    /// a virtual monitor of this size). Since protocol 1.5.
+    Send {
+        /// Display width in pixels.
+        #[arg(long, default_value_t = 1920)]
+        width: u32,
+        /// Display height in pixels.
+        #[arg(long, default_value_t = 1080)]
+        height: u32,
+    },
     /// Remove a window.
     Remove { id: String },
     /// Remove every window.
@@ -356,6 +366,7 @@ async fn main() -> anyhow::Result<()> {
         },
         Cmd::Preset { name } => Command::ApplyPreset { name },
         Cmd::Pick { multiple } => Command::PickSources { multiple },
+        Cmd::Send { width, height } => Command::SendWindow { width, height },
         Cmd::Remove { id } => Command::RemoveWindow {
             id: resolve_id(&id, &ids)?,
         },
@@ -411,7 +422,7 @@ async fn main() -> anyhow::Result<()> {
         } => Command::LoadLayout { name },
         Cmd::Record { .. } | Cmd::Discover => unreachable!(),
     };
-    let is_pick = matches!(cmd, Command::PickSources { .. });
+    let is_pick = matches!(cmd, Command::PickSources { .. } | Command::SendWindow { .. });
     let fire_and_forget = matches!(
         cmd,
         Command::Recenter | Command::Calibrate { .. } | Command::SetDisplayMode { .. } | Command::SetBrightness { .. }

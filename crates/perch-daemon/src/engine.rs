@@ -39,6 +39,8 @@ pub enum Effect {
     PickSources {
         /// Allow several sources at once.
         multiple: bool,
+        /// Requested glasses-display size (`send_window`).
+        size: Option<(u32, u32)>,
     },
     /// A local window was removed: let the capture backend free its source.
     ReleaseSource(perch_proto::Source),
@@ -211,7 +213,14 @@ impl Engine {
             Command::GetState => fx.push(Effect::Broadcast(Event::State(self.state()))),
             Command::PickSources { multiple } => {
                 self.pick_yaw = Some(perch_space::gaze_angles(&self.pose).0);
-                fx.push(Effect::PickSources { multiple });
+                fx.push(Effect::PickSources { multiple, size: None });
+            }
+            Command::SendWindow { width, height } => {
+                self.pick_yaw = Some(perch_space::gaze_angles(&self.pose).0);
+                fx.push(Effect::PickSources {
+                    multiple: false,
+                    size: Some((width.max(320), height.max(240))),
+                });
             }
             Command::SetGrid { grid } => {
                 let moved = self.ws.set_grid(grid);

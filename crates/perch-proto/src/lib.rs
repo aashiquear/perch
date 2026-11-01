@@ -28,7 +28,7 @@ use std::fmt;
 use uuid::Uuid;
 
 /// Protocol version. Bump `MAJOR` on any incompatible wire change.
-pub const PROTOCOL_VERSION: Version = Version { major: 1, minor: 4 };
+pub const PROTOCOL_VERSION: Version = Version { major: 1, minor: 5 };
 
 /// Semantic version of the wire protocol.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -573,6 +573,15 @@ pub enum Command {
         /// Allow selecting several sources at once.
         multiple: bool,
     },
+    /// Move the host's focused window onto a new glasses display of this
+    /// pixel size (a virtual monitor where supported; otherwise behaves like
+    /// `pick_sources`). Since 1.5.
+    SendWindow {
+        /// Display width in pixels.
+        width: u32,
+        /// Display height in pixels.
+        height: u32,
+    },
     /// Replace the slot grid and re-place every slotted window. Since 1.2.
     SetGrid {
         /// New grid.
@@ -782,6 +791,15 @@ mod tests {
         let m = Message::Command(Command::PickSources { multiple: true });
         let s = m.to_json().unwrap();
         assert_eq!(s, r#"{"msg":"command","cmd":"pick_sources","multiple":true}"#);
+        assert_eq!(Message::from_json(&s).unwrap(), m);
+
+        // Since 1.5.
+        let m = Message::Command(Command::SendWindow {
+            width: 960,
+            height: 1080,
+        });
+        let s = m.to_json().unwrap();
+        assert_eq!(s, r#"{"msg":"command","cmd":"send_window","width":960,"height":1080}"#);
         assert_eq!(Message::from_json(&s).unwrap(), m);
     }
 

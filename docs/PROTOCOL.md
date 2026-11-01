@@ -56,6 +56,7 @@ Major versions must match. If the host has a pairing token, the client's
 | `slot_window` | `id`, `row`, `index` | since 1.2: put a window into `row` at `index` (0 = leftmost, past the end appends); the row re-flows, `window_changed` for every window that moved |
 | `arrange_grid` | — | since 1.2: re-flow every visible window into the rows in z order, then `state` |
 | `set_window_span` | `id`, `span` | since 1.4: width in layout blocks (`grid.block_w_m`), 0 = automatic from pixels |
+| `send_window` | `width`, `height` | since 1.5: move the host's focused window onto a new glasses display of that size (GNOME: a virtual monitor); falls back to `pick_sources` |
 | `set_window_pixels` | `id`, `width`, `height` | since 1.3: source pixel size of a window; sets its width in the grid (`px_per_m`) |
 | `pick_sources` | `multiple` | since 1.1: host opens its source picker (Linux: desktop portal); each chosen window/monitor becomes a window near the gaze (`window_changed` ×n, then `focus_changed`), or `error` if cancelled |
 
@@ -120,6 +121,6 @@ sending poses to that address for 10 s after the last ping.
 
 ## Versioning
 
-Current: **1.4** (`set_window_span`, `grid.block_w_m`; 1.3 = flow-row grid: `Grid` fields and `slot_window` arguments changed, `set_window_pixels` added; 1.2 added the grid commands and `state.grid`; 1.1 added `pick_sources`). 
+Current: **1.5** (`send_window`; 1.4 = `set_window_span`, `grid.block_w_m`; 1.3 = flow-row grid: `Grid` fields and `slot_window` arguments changed, `set_window_pixels` added; 1.2 added the grid commands and `state.grid`; 1.1 added `pick_sources`). 
 `PROTOCOL_VERSION.major` bumps on incompatible change. Add fields with
 `#[serde(default)]` to stay minor-compatible.

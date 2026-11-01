@@ -42,7 +42,13 @@ pub type LocalSink = Option<Box<dyn perch_input::InputSink>>;
 type PickOutcome = Result<Vec<(perch_proto::Source, Option<(u32, u32)>)>, String>;
 
 /// Run a pick (or restore) on the blocking pool and report back.
-fn spawn_pick(backend: SharedBackend, restore: Option<String>, multiple: bool, tx: mpsc::UnboundedSender<PickOutcome>) {
+fn spawn_pick(
+    backend: SharedBackend,
+    restore: Option<String>,
+    multiple: bool,
+    size: Option<(u32, u32)>,
+    tx: mpsc::UnboundedSender<PickOutcome>,
+) {
     tokio::task::spawn_blocking(move || {
         let res = (|| {
             let mut guard = backend.lock().map_err(|_| "capture backend poisoned".to_string())?;
@@ -51,7 +57,10 @@ fn spawn_pick(backend: SharedBackend, restore: Option<String>, multiple: bool, t
             })?;
             let sources = match restore {
                 Some(tok) => b.restore(&tok),
-                None => b.pick(multiple),
+                None => match size {
+                    Some((w, h)) => b.send_window(w, h),
+                    None => b.pick(multiple),
+                },
             }
             .map_err(|e| e.to_string())?;
             let sized = sources
@@ -178,6 +187,7 @@ pub async fn run(
             Arc::clone(&backend),
             Some(cfg.capture.restore_token.clone()),
             true,
+            None,
             pick_tx.clone(),
         );
     }
@@ -372,14 +382,14 @@ async fn apply_effects(
             Effect::SetBrightness(b) => {
                 let _ = dev.cmd_tx.send(DeviceCommand::SetBrightness(b));
             }
-            Effect::PickSources { multiple } => {
+            Effect::PickSources { multiple, size } => {
                 if crate::capture::PERCH_FOCUSED.load(std::sync::atomic::Ordering::Relaxed) {
                     tracing::warn!("send window: Perch's own window is focused; focus the app first");
                     server.broadcast(Message::Event(Event::Error {
                         message: "focus the app you want on the glasses, then press Ctrl+Alt+G".into(),
                     }));
                 } else {
-                    spawn_pick(Arc::clone(backend), None, multiple, pick_tx.clone());
+                    spawn_pick(Arc::clone(backend), None, multiple, size, pick_tx.clone());
                 }
             }
             Effect::ReleaseSource(source) => {

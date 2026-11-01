@@ -136,3 +136,25 @@ laptop. Nothing persists across restarts: send windows again.
 - **Keyboard** goes to the focused app; clicking a glasses window focuses it.
 - Pointer updates are coalesced per batch and sent without waiting for
   replies, which is what removed the lag of the portal-based first attempt.
+
+### Perch mode vs laptop mode
+
+There are exactly two states, shown by the chip at the right of the bar:
+
+| | pointer + keyboard go to | how to switch |
+|---|---|---|
+| **laptop** (default) | the laptop desktop; glasses windows just display | Ctrl+Alt+P, GRAB tile, panel checkbox |
+| **glasses** ("grabbed") | the glasses: pointer lands in whichever glasses display it hovers, keys go to the app you last clicked there | Ctrl+Alt+P or the GRAB tile |
+
+In glasses mode everything is the app's own UI: drag a title bar to move it,
+resize at its edges, use its menus. Alt+drag is the only thing Perch keeps
+for itself (rearranging the spatial windows). Both switches, and Ctrl+Alt+G,
+wait until Ctrl and Alt are physically released so no modifier is left stuck
+on either side.
+
+Sending: Ctrl+Alt+G makes a full 1920×1080 glasses display, Ctrl+Alt+H a
+half-width 960×1080 one for chat/terminal-shaped apps (`perch send --width`
+for anything else). The window is then maximized so it fills the display
+and no desktop background shows; GNOME's `maximize` action is unbound by
+default, so Perch binds it to Ctrl+Super+Alt+F11 the first time (only if it
+was empty).

@@ -93,6 +93,9 @@ pub struct InputConfig {
     /// Ctrl+Alt+<this HID usage> sends the focused window to a new glasses
     /// display (default `G`). 0 disables.
     pub send_chord_usage: u16,
+    /// Ctrl+Alt+<this HID usage> sends the focused window to a half-width
+    /// glasses display (default `H`). 0 disables.
+    pub send_half_chord_usage: u16,
 }
 
 /// Buttons section.
@@ -140,9 +143,10 @@ impl Default for InputConfig {
             share_local_devices: true,
             edge_resistance_px: 40.0,
             gaze_focus_ms: 0,
-            panic_key_usage: 0x47,  // Scroll Lock
-            grab_chord_usage: 0x13, // Ctrl+Alt+P
-            send_chord_usage: 0x0a, // Ctrl+Alt+G
+            panic_key_usage: 0x47,       // Scroll Lock
+            grab_chord_usage: 0x13,      // Ctrl+Alt+P
+            send_chord_usage: 0x0a,      // Ctrl+Alt+G
+            send_half_chord_usage: 0x0b, // Ctrl+Alt+H
         }
     }
 }

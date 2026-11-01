@@ -112,6 +112,7 @@ fn main() -> anyhow::Result<()> {
         let panic_key = cfg.input.panic_key_usage;
         let chord_key = cfg.input.grab_chord_usage;
         let send_key = cfg.input.send_chord_usage;
+        let send_half_key = cfg.input.send_half_chord_usage;
         let ui_tx2 = ui_tx.clone();
         if cfg.input.share_local_devices {
             std::thread::Builder::new()
@@ -127,7 +128,8 @@ fn main() -> anyhow::Result<()> {
                         }
                     };
                     let mut grabbed = false;
-                    let mut send_pending = false;
+                    let mut send_pending: Option<(u32, u32)> = None;
+                    let mut grab_pending = false;
                     loop {
                         let want = grab.load(Ordering::Relaxed);
                         if want != grabbed {
@@ -150,16 +152,26 @@ fn main() -> anyhow::Result<()> {
                                 break;
                             }
                         };
-                        // A send requested with Ctrl+Alt+G fires only once Ctrl and
-                        // Alt are physically up: the daemon injects Super+Shift+Right
-                        // and GNOME would otherwise read Ctrl+Alt+Shift+Right, which
-                        // moves the window to another workspace instead.
+                        // Chords fire only once Ctrl and Alt are physically up.
+                        // Sending: the daemon injects Super+Shift+Right and GNOME
+                        // would read Ctrl+Alt+Shift+Right (move to workspace).
+                        // Grabbing: the OS saw the modifiers go down; if we grab
+                        // before it sees them come up they stay stuck down for
+                        // every later key, on the laptop and (via injection) in
+                        // the glasses alike.
                         if let perch_proto::InputEvent::Key { mods, .. } = ev {
-                            if send_pending && mods & 5 == 0 {
-                                send_pending = false;
-                                let _ = ui_tx2.send(capture::UiMsg::Command(perch_proto::Command::PickSources {
-                                    multiple: false,
-                                }));
+                            if mods & 5 == 0 {
+                                if let Some(size) = send_pending.take() {
+                                    let _ = ui_tx2.send(capture::UiMsg::Command(perch_proto::Command::SendWindow {
+                                        width: size.0,
+                                        height: size.1,
+                                    }));
+                                }
+                                if grab_pending {
+                                    grab_pending = false;
+                                    grab.store(!grabbed, Ordering::Relaxed);
+                                    continue;
+                                }
                             }
                         }
                         if let perch_proto::InputEvent::Key {
@@ -171,11 +183,19 @@ fn main() -> anyhow::Result<()> {
                             // Ctrl+Alt+<chord> (either side) or the panic key.
                             let ctrl_alt = mods & 1 != 0 && mods & 4 != 0;
                             if send_key != 0 && usage == send_key && ctrl_alt {
-                                send_pending = true;
+                                send_pending = Some((1920, 1080));
                                 continue;
                             }
-                            if usage == panic_key || (chord_key != 0 && usage == chord_key && ctrl_alt) {
+                            if send_half_key != 0 && usage == send_half_key && ctrl_alt {
+                                send_pending = Some((960, 1080));
+                                continue;
+                            }
+                            if usage == panic_key {
                                 grab.store(!grabbed, Ordering::Relaxed);
+                                continue;
+                            }
+                            if chord_key != 0 && usage == chord_key && ctrl_alt {
+                                grab_pending = true;
                                 continue;
                             }
                         }

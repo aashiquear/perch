@@ -30,9 +30,16 @@ const SC: &str = "org.gnome.Mutter.ScreenCast";
 pub const DEFAULT_VIRTUAL_SIZE: (u32, u32) = (1920, 1080);
 const VIRTUAL_FPS: u32 = 60;
 // evdev key codes for GNOME's default shortcuts.
+const KEY_LEFTCTRL: u32 = 29;
 const KEY_LEFTSHIFT: u32 = 42;
+const KEY_LEFTALT: u32 = 56;
+const KEY_F11: u32 = 87;
 const KEY_RIGHT: u32 = 106;
 const KEY_LEFTMETA: u32 = 125;
+/// GNOME's `maximize` action is unbound by default; Perch binds it to this
+/// deliberately obscure chord so a window can be maximized idempotently
+/// (`toggle-maximized` would un-maximize one that already was).
+const MAXIMIZE_BINDING: &str = "<Ctrl><Super><Alt>F11";
 
 enum Req {
     Create {
@@ -55,6 +62,8 @@ enum Req {
     Stop {
         display: usize,
     },
+    /// Release every key still held through any session.
+    ReleaseKeys,
     Close {
         reply: mpsc::Sender<()>,
     },
@@ -92,6 +101,10 @@ pub struct GnomeBackend {
     layout: Vec<LogicalMonitor>,
     /// Size for the next virtual display.
     pub virtual_size: (u32, u32),
+    /// Maximize a window after sending it, so it fills its display and no
+    /// desktop background shows around it.
+    pub auto_maximize: bool,
+    maximize_bound: bool,
 }
 
 impl GnomeBackend {
@@ -115,6 +128,8 @@ impl GnomeBackend {
             displays: Vec::new(),
             layout: Vec::new(),
             virtual_size: DEFAULT_VIRTUAL_SIZE,
+            auto_maximize: true,
+            maximize_bound: false,
         })
     }
 
@@ -206,9 +221,10 @@ impl GnomeBackend {
     /// Move the focused window onto display `i` with GNOME's
     /// `move-to-monitor-right` shortcut, as many times as monitors lie
     /// between the primary (laptop) display and it.
-    fn move_focused_window_to(&self, i: usize) {
+    fn move_focused_window_to(&mut self, i: usize) {
         let Some(Some(d)) = self.displays.get(i) else { return };
         let Some((x, _, _, _)) = d.rect else { return };
+        let d_index = d.index;
         let mut xs: Vec<i32> = self.layout.iter().map(|m| m.x).collect();
         xs.sort_unstable();
         xs.dedup();
@@ -226,10 +242,57 @@ impl GnomeBackend {
             return;
         }
         let _ = self.req_tx.send(Req::Chord {
-            display: d.index,
+            display: d_index,
             codes: vec![KEY_LEFTMETA, KEY_LEFTSHIFT, KEY_RIGHT],
             times: steps,
         });
+        if self.auto_maximize && self.ensure_maximize_binding() {
+            let _ = self.req_tx.send(Req::Chord {
+                display: d_index,
+                codes: vec![KEY_LEFTCTRL, KEY_LEFTMETA, KEY_LEFTALT, KEY_F11],
+                times: 1,
+            });
+        }
+    }
+
+    /// Bind GNOME's `maximize` action (unbound by default) once per run.
+    fn ensure_maximize_binding(&mut self) -> bool {
+        if self.maximize_bound {
+            return true;
+        }
+        let get = std::process::Command::new("gsettings")
+            .args(["get", "org.gnome.desktop.wm.keybindings", "maximize"])
+            .output();
+        let current = get
+            .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+            .unwrap_or_default();
+        if current.contains(MAXIMIZE_BINDING) {
+            self.maximize_bound = true;
+            return true;
+        }
+        if !(current.is_empty() || current == "@as []" || current == "[]") {
+            tracing::info!(
+                current,
+                "leaving the user's GNOME `maximize` binding alone; no auto-maximize"
+            );
+            return false;
+        }
+        let set = std::process::Command::new("gsettings")
+            .args([
+                "set",
+                "org.gnome.desktop.wm.keybindings",
+                "maximize",
+                &format!("['{MAXIMIZE_BINDING}']"),
+            ])
+            .status();
+        self.maximize_bound = matches!(set, Ok(s) if s.success());
+        if self.maximize_bound {
+            tracing::info!(
+                binding = MAXIMIZE_BINDING,
+                "bound GNOME `maximize` for auto-maximize on send"
+            );
+        }
+        self.maximize_bound
     }
 }
 
@@ -263,6 +326,11 @@ impl CaptureBackend for GnomeBackend {
         let i = self.create_display()?;
         self.move_focused_window_to(i);
         Ok(vec![self.source_for(i)])
+    }
+
+    fn send_window(&mut self, width: u32, height: u32) -> Result<Vec<Source>, CaptureError> {
+        self.virtual_size = (width, height);
+        self.pick(false)
     }
 
     fn restore(&mut self, _token: &str) -> Result<Vec<Source>, CaptureError> {
@@ -314,6 +382,7 @@ impl CaptureBackend for GnomeBackend {
     }
 
     fn release_pointer(&mut self) {
+        let _ = self.req_tx.send(Req::ReleaseKeys);
         // Virtual monitors sit to the right of the layout: a large leftward
         // motion lands on the leftmost physical display.
         if let Some(d) = self.displays.iter().flatten().next() {
@@ -399,6 +468,8 @@ impl CaptureSource for SlotSource {
 struct MutterSession {
     rd: zbus::Proxy<'static>,
     stream_path: String,
+    /// Keycodes currently pressed through this session's virtual keyboard.
+    held: std::collections::HashSet<u32>,
 }
 
 fn dbus_thread(rx: mpsc::Receiver<Req>, ready: mpsc::Sender<Result<(), String>>) {
@@ -443,13 +514,14 @@ fn dbus_thread(rx: mpsc::Receiver<Req>, ready: mpsc::Sender<Result<(), String>>)
                     _ => pending.push((display, events)),
                 },
                 other => {
-                    flush(&rt, &sessions, &mut pending);
+                    flush(&rt, &mut sessions, &mut pending);
                     match other {
                         Req::Create { reply } => {
                             let res = rt.block_on(create_session(&conn)).map(|(rd, stream_path, node_id)| {
                                 sessions.push(MutterSession {
                                     rd,
                                     stream_path: stream_path.clone(),
+                                    held: Default::default(),
                                 });
                                 Created {
                                     index: sessions.len() - 1,
@@ -462,6 +534,14 @@ fn dbus_thread(rx: mpsc::Receiver<Req>, ready: mpsc::Sender<Result<(), String>>)
                         Req::Chord { display, codes, times } => {
                             if let Some(s) = sessions.get(display) {
                                 rt.block_on(chord(&s.rd, &codes, times));
+                            }
+                        }
+                        Req::ReleaseKeys => {
+                            for s in sessions.iter_mut() {
+                                let held: Vec<u32> = s.held.drain().collect();
+                                for code in held {
+                                    let _ = rt.block_on(s.rd.call_method("NotifyKeyboardKeycode", &(code, false)));
+                                }
                             }
                         }
                         Req::Stop { display } => {
@@ -484,13 +564,13 @@ fn dbus_thread(rx: mpsc::Receiver<Req>, ready: mpsc::Sender<Result<(), String>>)
                 }
             }
         }
-        flush(&rt, &sessions, &mut pending);
+        flush(&rt, &mut sessions, &mut pending);
     }
 }
 
-fn flush(rt: &tokio::runtime::Runtime, sessions: &[MutterSession], pending: &mut Vec<(usize, Vec<InputEvent>)>) {
+fn flush(rt: &tokio::runtime::Runtime, sessions: &mut [MutterSession], pending: &mut Vec<(usize, Vec<InputEvent>)>) {
     for (display, events) in pending.drain(..) {
-        if let Some(s) = sessions.get(display) {
+        if let Some(s) = sessions.get_mut(display) {
             let events = crate::coalesce_moves(events);
             rt.block_on(inject(s, &events));
         }
@@ -554,7 +634,7 @@ async fn create_session(conn: &zbus::Connection) -> Result<(zbus::Proxy<'static>
     Ok((rd, stream_path.to_string(), node_id))
 }
 
-async fn inject(s: &MutterSession, events: &[InputEvent]) {
+async fn inject(s: &mut MutterSession, events: &[InputEvent]) {
     for ev in events {
         let res = match *ev {
             InputEvent::MouseMoveAbs { x, y } => {
@@ -594,7 +674,14 @@ async fn inject(s: &MutterSession, events: &[InputEvent]) {
                 r
             }
             InputEvent::Key { usage, down, .. } => match perch_input::keymap::hid_to_evdev(usage) {
-                Some(code) => s.rd.call_noreply("NotifyKeyboardKeycode", &(code as u32, down)).await,
+                Some(code) => {
+                    if down {
+                        s.held.insert(code as u32);
+                    } else {
+                        s.held.remove(&(code as u32));
+                    }
+                    s.rd.call_noreply("NotifyKeyboardKeycode", &(code as u32, down)).await
+                }
                 None => Ok(()),
             },
             InputEvent::Text { ch } => {
