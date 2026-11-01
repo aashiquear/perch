@@ -28,7 +28,7 @@ use std::fmt;
 use uuid::Uuid;
 
 /// Protocol version. Bump `MAJOR` on any incompatible wire change.
-pub const PROTOCOL_VERSION: Version = Version { major: 1, minor: 3 };
+pub const PROTOCOL_VERSION: Version = Version { major: 1, minor: 4 };
 
 /// Semantic version of the wire protocol.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -275,6 +275,9 @@ pub struct Grid {
     pub px_per_m: f32,
     /// Widest a window may be, metres.
     pub max_w_m: f32,
+    /// Width of one layout block, metres; a window with a span of `n` is
+    /// `n` blocks (plus gaps) wide regardless of its pixel size. Since 1.4.
+    pub block_w_m: f32,
 }
 
 impl Default for Grid {
@@ -288,6 +291,7 @@ impl Default for Grid {
             center_pitch: 0.0,
             px_per_m: 1600.0,
             max_w_m: 2.4,
+            block_w_m: 0.6,
         }
     }
 }
@@ -586,6 +590,14 @@ pub enum Command {
     },
     /// Put every visible window into the grid rows, in z order. Since 1.2.
     ArrangeGrid,
+    /// Make a window span `span` layout blocks wide (0 = automatic, from its
+    /// pixel size). Lets one window cover two or three blocks. Since 1.4.
+    SetWindowSpan {
+        /// Window.
+        id: WindowId,
+        /// Blocks, 0 = auto.
+        span: u32,
+    },
     /// Tell the host the pixel size of a window's content, which sets its
     /// size in the grid. Since 1.3.
     SetWindowPixels {

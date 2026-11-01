@@ -92,3 +92,22 @@ When the OS pointer is on the glasses output, perchd draws its own arrow and:
 
 Clicks *inside* a captured window do not yet reach the application behind
 it (that is M3: input routing).
+
+## Control bar, panel and input grab (since 1.4)
+
+- **Bar**: a compact pill of icon tiles at the bottom centre of the glasses;
+  hovering a tile shows its name above the pill. A chip at the right shows
+  the clock, open windows, rows, distance and who owns the mouse (OS/PERCH).
+- **Control panel**: `perchd` also opens a normal window on the laptop
+  ("Perch"): pick windows, arrange, recenter, centre here, calibrate, clear,
+  the grid sliders, per-window focus/pin/remove/span, sharing status, quit.
+- **Grab**: the GRAB tile, the panel checkbox or **Scroll Lock** hands the
+  physical mouse and keyboard to Perch (needs the `input` group). The
+  pointer then lives on the glasses: over a captured *monitor* it is placed
+  at the matching desktop position and clicks/scroll/keys go to the
+  application there; over a captured *window* motion is relative (the
+  portal does not reveal where a window sits); Alt + left button drags the
+  spatial window instead; the bar works as usual. Scroll Lock again gives
+  the devices back to the OS.
+- **Spans**: `perch span <id> 2` makes a window two layout blocks wide
+  (`--block-w`), whatever its pixel size; `0` returns to automatic.

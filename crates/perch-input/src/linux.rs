@@ -9,13 +9,25 @@
 //! is a kernel-level virtual device. Capture via evdev also works everywhere
 //! but requires the `input` group. This is why we don't use XTest/libei here.
 
-use crate::{keymap, InputError, InputEvent, InputSink, InputSource};
-use evdev::{uinput::VirtualDevice, AttributeSet, EventType, InputEvent as EvEvent, KeyCode, RelativeAxisCode};
+use crate::{keymap, AbsTarget, InputError, InputEvent, InputSink, InputSource};
+use evdev::{
+    uinput::VirtualDevice, AbsInfo, AbsoluteAxisCode, AttributeSet, EventType, InputEvent as EvEvent, KeyCode,
+    RelativeAxisCode, UinputAbsSetup,
+};
 use perch_proto::MouseButton;
 
-/// Virtual keyboard + mouse via uinput.
+/// Range of the virtual absolute pointer; the compositor maps it onto the
+/// whole desktop (all outputs), like a VM's USB tablet.
+const ABS_MAX: i32 = 65535;
+
+/// Virtual keyboard + mouse via uinput, plus a virtual absolute pointer
+/// ("tablet") for placing the OS pointer at an exact desktop position.
 pub struct UinputSink {
     dev: VirtualDevice,
+    /// Absolute pointer device; `None` if it could not be created.
+    abs: Option<VirtualDevice>,
+    /// Where `MouseMoveAbs` lands; `None` → relative fallback.
+    target: Option<AbsTarget>,
     /// Last absolute position we injected, in target display pixels, so we can
     /// convert `MouseMoveAbs` (window-normalised) to relative motion.
     last_px: Option<(f32, f32)>,
@@ -53,11 +65,39 @@ impl UinputSink {
             .map_err(|e| InputError::Unavailable(e.to_string()))?
             .build()
             .map_err(|e| InputError::Unavailable(format!("uinput build: {e}")))?;
+        let abs = match Self::abs_device() {
+            Ok(d) => Some(d),
+            Err(e) => {
+                tracing::warn!("no absolute pointer device ({e}); MouseMoveAbs will use relative motion");
+                None
+            }
+        };
         Ok(Self {
             dev,
+            abs,
+            target: None,
             last_px: None,
             display_px,
         })
+    }
+
+    fn abs_device() -> Result<VirtualDevice, InputError> {
+        let mut keys = AttributeSet::<KeyCode>::new();
+        keys.insert(KeyCode::BTN_LEFT);
+        keys.insert(KeyCode::BTN_RIGHT);
+        keys.insert(KeyCode::BTN_MIDDLE);
+        let info = AbsInfo::new(0, 0, ABS_MAX, 0, 0, 0);
+        VirtualDevice::builder()
+            .map_err(|e| InputError::Unavailable(format!("/dev/uinput: {e}")))?
+            .name("Perch Virtual Pointer")
+            .with_keys(&keys)
+            .map_err(|e| InputError::Unavailable(e.to_string()))?
+            .with_absolute_axis(&UinputAbsSetup::new(AbsoluteAxisCode::ABS_X, info))
+            .map_err(|e| InputError::Unavailable(e.to_string()))?
+            .with_absolute_axis(&UinputAbsSetup::new(AbsoluteAxisCode::ABS_Y, info))
+            .map_err(|e| InputError::Unavailable(e.to_string()))?
+            .build()
+            .map_err(|e| InputError::Unavailable(format!("uinput abs build: {e}")))
     }
 
     fn key(&mut self, code: u16, down: bool) -> Result<(), InputError> {
@@ -78,6 +118,10 @@ fn button_code(b: MouseButton) -> u16 {
 }
 
 impl InputSink for UinputSink {
+    fn set_abs_target(&mut self, target: Option<AbsTarget>) {
+        self.target = target;
+    }
+
     fn inject(&mut self, ev: InputEvent) -> Result<(), InputError> {
         match ev {
             InputEvent::MouseMove { dx, dy } => self
@@ -88,10 +132,23 @@ impl InputSink for UinputSink {
                 ])
                 .map_err(InputError::Io),
             InputEvent::MouseMoveAbs { x, y } => {
-                // uinput has no absolute pointer without an ABS device that
-                // most compositors treat as a tablet; relative deltas from the
-                // last known position behave better. First event: jump from
-                // the display centre.
+                if let (Some(abs), Some(t)) = (self.abs.as_mut(), self.target) {
+                    // Desktop position in logical pixels → 0..ABS_MAX over the
+                    // whole desktop.
+                    let dx = t.rect.0 + x.clamp(0.0, 1.0) * t.rect.2;
+                    let dy = t.rect.1 + y.clamp(0.0, 1.0) * t.rect.3;
+                    let ax = (dx / t.bounds.0.max(1.0) * ABS_MAX as f32).round() as i32;
+                    let ay = (dy / t.bounds.1.max(1.0) * ABS_MAX as f32).round() as i32;
+                    return abs
+                        .emit(&[
+                            EvEvent::new(EventType::ABSOLUTE.0, AbsoluteAxisCode::ABS_X.0, ax.clamp(0, ABS_MAX)),
+                            EvEvent::new(EventType::ABSOLUTE.0, AbsoluteAxisCode::ABS_Y.0, ay.clamp(0, ABS_MAX)),
+                        ])
+                        .map_err(InputError::Io);
+                }
+                // No absolute device / unknown rectangle: relative deltas from
+                // the last known position. First event: jump from the display
+                // centre.
                 let px = (x * self.display_px.0, y * self.display_px.1);
                 let from = self
                     .last_px
@@ -101,6 +158,20 @@ impl InputSink for UinputSink {
                     dx: px.0 - from.0,
                     dy: px.1 - from.1,
                 })
+            }
+            InputEvent::MouseButton { button, down } if self.abs.is_some() && self.target.is_some() => {
+                // Buttons on the absolute device so the click pairs with the
+                // position it set.
+                let code = button_code(button);
+                if matches!(button, MouseButton::Left | MouseButton::Right | MouseButton::Middle) {
+                    self.abs
+                        .as_mut()
+                        .expect("checked")
+                        .emit(&[EvEvent::new(EventType::KEY.0, code, down as i32)])
+                        .map_err(InputError::Io)
+                } else {
+                    self.key(code, down)
+                }
             }
             InputEvent::MouseButton { button, down } => self.key(button_code(button), down),
             InputEvent::Scroll { dx, dy } => self

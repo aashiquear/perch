@@ -362,6 +362,9 @@ pub struct Workspace {
     /// Source pixel size per window, which sets its width in the grid.
     #[serde(default)]
     pub sizes: HashMap<WindowId, (u32, u32)>,
+    /// Explicit width in layout blocks per window (overrides pixel size).
+    #[serde(default)]
+    pub spans: HashMap<WindowId, u32>,
 }
 
 /// What a drag would do if released now: the window joins `row` at `index`.
@@ -382,12 +385,28 @@ pub struct SnapPreview {
 /// that overflows the row the window shrinks to fit. Without a pixel size the
 /// window fills the row height at `aspect`.
 pub fn grid_window_size(g: &Grid, px: Option<(u32, u32)>, aspect: f32) -> (f32, f32) {
+    grid_window_size_span(g, px, aspect, 0)
+}
+
+/// [`grid_window_size`] with an explicit `span` in blocks (0 = automatic):
+/// a spanned window is exactly `span` blocks (plus the gaps between them)
+/// wide and as tall as its aspect allows within the row.
+pub fn grid_window_size_span(g: &Grid, px: Option<(u32, u32)>, aspect: f32, span: u32) -> (f32, f32) {
     let aspect = if aspect.is_finite() && aspect > 0.05 {
         aspect
     } else {
         16.0 / 9.0
     };
     let row_h = g.row_h_m.max(0.05);
+    if span > 0 {
+        let aspect = match px {
+            Some((pw, ph)) if pw > 0 && ph > 0 => pw as f32 / ph as f32,
+            _ => aspect,
+        };
+        let w = span as f32 * g.block_w_m.max(0.05) + (span - 1) as f32 * g.gap_m;
+        let h = (w / aspect).min(row_h);
+        return (w, h);
+    }
     let (mut w, mut h) = match px {
         Some((pw, ph)) if pw > 0 && ph > 0 => {
             let aspect = pw as f32 / ph as f32;
@@ -471,6 +490,7 @@ impl Workspace {
     pub fn remove(&mut self, id: WindowId) -> Result<(), SpaceError> {
         let row = self.slots.remove(&id).map(|(r, _)| r);
         self.sizes.remove(&id);
+        self.spans.remove(&id);
         if let Some(r) = row {
             self.relayout_row(r);
         }
@@ -574,7 +594,29 @@ impl Workspace {
             .get(id)
             .map(|w| w.placement.width_m / w.placement.height_m.max(1e-3))
             .unwrap_or(16.0 / 9.0);
-        grid_window_size(&self.grid, self.sizes.get(&id).copied(), aspect)
+        let span = self.spans.get(&id).copied().unwrap_or(0);
+        grid_window_size_span(&self.grid, self.sizes.get(&id).copied(), aspect, span)
+    }
+
+    /// Set a window's width in layout blocks (0 = automatic). Returns the ids
+    /// whose placement changed.
+    pub fn set_span(&mut self, id: WindowId, span: u32) -> Result<Vec<WindowId>, SpaceError> {
+        self.get(id).ok_or(SpaceError::NoSuchWindow)?;
+        if span == 0 {
+            self.spans.remove(&id);
+        } else {
+            self.spans.insert(id, span.min(8));
+        }
+        Ok(match self.slots.get(&id) {
+            Some(&(row, _)) => self.relayout_row(row),
+            None => {
+                let (w, h) = self.window_size(id);
+                let win = self.get_mut(id)?;
+                win.placement.width_m = w;
+                win.placement.height_m = h;
+                vec![id]
+            }
+        })
     }
 
     /// Placements a row would have with exactly these members, in order.
@@ -1073,6 +1115,12 @@ mod tests {
         );
         let (w4, h4) = grid_window_size(&g, None, 2.0);
         assert!((h4 - g.row_h_m).abs() < 1e-6 && (w4 - 2.0 * g.row_h_m).abs() < 1e-6);
+        // Spans: 2 blocks = 2 × block + 1 gap, whatever the pixels say.
+        let (w5, h5) = grid_window_size_span(&g, Some((960, 1080)), 1.0, 2);
+        assert!((w5 - (2.0 * g.block_w_m + g.gap_m)).abs() < 1e-6);
+        assert!((h5 - g.row_h_m).abs() < 1e-6, "tall aspect is row-limited");
+        let (w6, _) = grid_window_size_span(&g, Some((1920, 1080)), 1.0, 3);
+        assert!((w6 - (3.0 * g.block_w_m + 2.0 * g.gap_m)).abs() < 1e-6);
         assert!(grid_row_pitch(&Grid { rows: 2, ..g }, 0) > 0.0, "row 0 is up");
         assert!(grid_row_pitch(&Grid { rows: 2, ..g }, 1) < 0.0);
     }
@@ -1136,6 +1184,17 @@ mod tests {
         ws.set_slot(ids[1], 1, 0).unwrap();
         ws.set_grid(Grid { rows: 1, ..g });
         assert_eq!(ws.row_members(0).len(), 3, "row 1 folded into row 0");
+        // Span: window 1 covers three blocks and the row re-flows around it.
+        let before = ws.get(ids[1]).unwrap().placement.width_m;
+        let moved = ws.set_span(ids[1], 3).unwrap();
+        assert!(moved.contains(&ids[1]));
+        let after = ws.get(ids[1]).unwrap().placement.width_m;
+        assert!((after - (3.0 * g.block_w_m + 2.0 * g.gap_m)).abs() < 1e-5 && after > before);
+        ws.set_span(ids[1], 0).unwrap();
+        assert!(
+            (ws.get(ids[1]).unwrap().placement.width_m - before).abs() < 1e-5,
+            "auto again"
+        );
         let back = Workspace::from_json(&ws.to_json()).unwrap();
         assert_eq!(back.sizes[&ids[0]], (1920, 1080));
         assert_eq!(back.slots.len(), 3);

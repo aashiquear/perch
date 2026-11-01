@@ -49,6 +49,8 @@ pub struct PickedStream {
     /// Portal's opaque per-source id, if it gives one; picking the same
     /// window twice then maps to the same [`Source`] instead of a duplicate.
     pub portal_id: Option<String>,
+    /// Logical desktop position (monitors only).
+    pub position: Option<(i32, i32)>,
     /// The PipeWire connection of the portal session that owns this node.
     session: Arc<PwSession>,
 }
@@ -61,11 +63,36 @@ enum PortalReq {
     },
 }
 
-/// (PipeWire node id, size, monitor/window, portal id) for one picked stream.
-type RawStream = (u32, Option<(u32, u32)>, Option<SourceType>, Option<String>);
+/// One picked stream as the portal describes it.
+#[derive(Debug, Clone)]
+struct RawStream {
+    node_id: u32,
+    size: Option<(u32, u32)>,
+    kind: Option<SourceType>,
+    portal_id: Option<String>,
+    position: Option<(i32, i32)>,
+}
+
+/// One logical monitor as GNOME lays it out (logical pixels).
+#[derive(Debug, Clone, PartialEq)]
+pub struct LogicalMonitor {
+    /// Connector, e.g. "DP-5".
+    pub connector: String,
+    /// Position.
+    pub x: i32,
+    /// Position.
+    pub y: i32,
+    /// Logical size (mode size ÷ scale).
+    pub w: f32,
+    /// Logical size.
+    pub h: f32,
+    /// Scale factor.
+    pub scale: f32,
+}
 
 struct PickResult {
     streams: Vec<RawStream>,
+    layout: Vec<LogicalMonitor>,
     restore_token: Option<String>,
     fd: OwnedFd,
 }
@@ -82,6 +109,7 @@ pub struct PortalBackend {
     req_tx: mpsc::Sender<PortalReq>,
     streams: Vec<PickedStream>,
     restore_token: Option<String>,
+    layout: Vec<LogicalMonitor>,
 }
 
 impl PortalBackend {
@@ -98,6 +126,7 @@ impl PortalBackend {
             req_tx,
             streams: Vec::new(),
             restore_token: None,
+            layout: Vec::new(),
         })
     }
 
@@ -115,8 +144,18 @@ impl PortalBackend {
             .recv_timeout(Duration::from_secs(300))
             .map_err(|_| CaptureError::Other("portal timed out".into()))??;
         let session = Arc::new(PwSession::start(res.fd)?);
+        if !res.layout.is_empty() {
+            self.layout = res.layout;
+        }
         let mut added = Vec::new();
-        for (node_id, size, kind, portal_id) in res.streams {
+        for RawStream {
+            node_id,
+            size,
+            kind,
+            portal_id,
+            position,
+        } in res.streams
+        {
             if let Some(existing) = portal_id
                 .as_deref()
                 .and_then(|pid| self.streams.iter().find(|s| s.portal_id.as_deref() == Some(pid)))
@@ -134,6 +173,7 @@ impl PortalBackend {
                 size,
                 kind,
                 portal_id,
+                position,
                 session: Arc::clone(&session),
             });
             added.push(self.source_for(index));
@@ -195,6 +235,30 @@ impl CaptureBackend for PortalBackend {
 
     fn source_size(&self, source: &Source) -> Option<(u32, u32)> {
         self.stream_for(source).and_then(|s| s.size)
+    }
+
+    fn source_screen_rect(&self, source: &Source) -> Option<(f32, f32, f32, f32)> {
+        let s = self.stream_for(source)?;
+        let (px, py) = s.position?;
+        let (w, h) = s.size?;
+        // The stream is in device pixels; the logical monitor at this position
+        // tells us the scale.
+        let scale = self
+            .layout
+            .iter()
+            .find(|m| m.x == px && m.y == py)
+            .map(|m| m.scale)
+            .unwrap_or(1.0);
+        Some((px as f32, py as f32, w as f32 / scale, h as f32 / scale))
+    }
+
+    fn screen_bounds(&self) -> Option<(f32, f32)> {
+        if self.layout.is_empty() {
+            return None;
+        }
+        let w = self.layout.iter().map(|m| m.x as f32 + m.w).fold(0.0, f32::max);
+        let h = self.layout.iter().map(|m| m.y as f32 + m.h).fold(0.0, f32::max);
+        Some((w, h))
     }
 
     fn open(&mut self, source: &Source, fps: u32) -> Result<Box<dyn CaptureSource>, CaptureError> {
@@ -269,18 +333,25 @@ async fn pick(multiple: bool, restore_token: Option<&str>) -> Result<(PickResult
     let picked = streams
         .streams()
         .iter()
-        .map(|s| {
-            (
-                s.pipe_wire_node_id(),
-                s.size().map(|(w, h)| (w.max(1) as u32, h.max(1) as u32)),
-                s.source_type(),
-                s.id().map(ToOwned::to_owned),
-            )
+        .map(|s| RawStream {
+            node_id: s.pipe_wire_node_id(),
+            size: s.size().map(|(w, h)| (w.max(1) as u32, h.max(1) as u32)),
+            kind: s.source_type(),
+            portal_id: s.id().map(ToOwned::to_owned),
+            position: s.position(),
         })
         .collect();
+    let layout = match monitor_layout().await {
+        Ok(l) => l,
+        Err(e) => {
+            tracing::info!("monitor layout unavailable ({e}); absolute pointer mapping off");
+            Vec::new()
+        }
+    };
     Ok((
         PickResult {
             streams: picked,
+            layout,
             restore_token: streams.restore_token().map(ToOwned::to_owned),
             fd,
         },
@@ -289,6 +360,61 @@ async fn pick(multiple: bool, restore_token: Option<&str>) -> Result<(PickResult
             _session: session,
         },
     ))
+}
+
+/// GNOME's monitor layout via `org.gnome.Mutter.DisplayConfig.GetCurrentState`.
+/// Other compositors: empty (TODO wlr-output-management).
+async fn monitor_layout() -> Result<Vec<LogicalMonitor>, String> {
+    use ashpd::zbus;
+    use std::collections::HashMap;
+    type Props = HashMap<String, zbus::zvariant::OwnedValue>;
+    type MonitorId = (String, String, String, String);
+    type Mode = (String, i32, i32, f64, f64, Vec<f64>, Props);
+    type Monitor = (MonitorId, Vec<Mode>, Props);
+    type Logical = (i32, i32, f64, u32, bool, Vec<MonitorId>, Props);
+
+    let conn = zbus::Connection::session().await.map_err(|e| e.to_string())?;
+    let reply = conn
+        .call_method(
+            Some("org.gnome.Mutter.DisplayConfig"),
+            "/org/gnome/Mutter/DisplayConfig",
+            Some("org.gnome.Mutter.DisplayConfig"),
+            "GetCurrentState",
+            &(),
+        )
+        .await
+        .map_err(|e| e.to_string())?;
+    let body = reply.body();
+    let (_serial, monitors, logicals, _props): (u32, Vec<Monitor>, Vec<Logical>, Props) =
+        body.deserialize().map_err(|e| e.to_string())?;
+    let current_mode = |id: &MonitorId| -> Option<(i32, i32)> {
+        monitors.iter().find(|m| &m.0 == id).and_then(|m| {
+            m.1.iter()
+                .find(|mode| {
+                    mode.6
+                        .get("is-current")
+                        .and_then(|v| bool::try_from(v.clone()).ok())
+                        .unwrap_or(false)
+                })
+                .map(|mode| (mode.1, mode.2))
+        })
+    };
+    Ok(logicals
+        .iter()
+        .filter_map(|l| {
+            let id = l.5.first()?;
+            let (mw, mh) = current_mode(id)?;
+            let scale = l.2 as f32;
+            Some(LogicalMonitor {
+                connector: id.0.clone(),
+                x: l.0,
+                y: l.1,
+                w: mw as f32 / scale,
+                h: mh as f32 / scale,
+                scale,
+            })
+        })
+        .collect())
 }
 
 // ---------------------------------------------------------------------------

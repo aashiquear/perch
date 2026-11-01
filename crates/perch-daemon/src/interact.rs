@@ -6,11 +6,14 @@
 //! `perch-space` / `perch-ui`; this module only turns winit events into
 //! engine calls and commands.
 
+use crate::capture::UiMsg;
 use crate::engine::Engine;
 use perch_capture::{Frame, PixelFormat};
-use perch_proto::{Anchor, Command, Placement, Pose, SpatialWindow, WindowId};
+use perch_proto::{Anchor, Command, InputEvent, MouseButton, Placement, Pose, SpatialWindow, WindowId};
 use perch_space::{Projector, ScreenQuad};
-use perch_ui::{Bar, BarAction};
+use perch_ui::{Bar, BarAction, BarInfo};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use tokio::sync::mpsc;
 use uuid::Uuid;
 
@@ -60,6 +63,18 @@ impl FrameCtx {
         }
     }
 
+    /// Texture coordinates (0..1) of view pixel (`x`, `y`) inside window
+    /// `id`'s projected quad.
+    fn window_uv(&self, id: WindowId, x: f32, y: f32) -> Option<(f32, f32)> {
+        let q = self.quads.iter().find(|q| q.id == id)?;
+        let inv = Projector::homography(q).try_inverse()?;
+        let p = inv * nalgebra::Vector3::new(x, y, 1.0);
+        if p.z.abs() < 1e-6 {
+            return None;
+        }
+        Some((p.x / p.z, p.y / p.z))
+    }
+
     fn topmost_window_at(&self, x: f32, y: f32) -> Option<WindowId> {
         let p = nalgebra::Point2::new(x, y);
         self.quads
@@ -91,17 +106,23 @@ pub struct Interaction {
     bar: Bar,
     bar_hover: Option<usize>,
     bar_pressed: Option<usize>,
-    /// (view width, hover, pressed, status) of the bar texture last uploaded.
-    bar_uploaded: Option<(u32, Option<usize>, Option<usize>, String)>,
+    /// (view width, hover, pressed, info) of the bar texture last uploaded.
+    bar_uploaded: Option<(u32, Option<usize>, Option<usize>, BarInfo)>,
     textures_uploaded: bool,
     press: Option<Press>,
     drag: Option<Drag>,
-    commands: mpsc::UnboundedSender<Command>,
+    commands: mpsc::UnboundedSender<UiMsg>,
+    /// Perch owns the physical devices (set by the GRAB button / Scroll Lock).
+    grab: Arc<AtomicBool>,
+    /// Modifier bits from the grabbed keyboard (1 ctrl, 2 shift, 4 alt, 8 gui).
+    mods: u8,
+    /// Window the spatial pointer is over, when it is not Perch's own UI.
+    hovered: Option<WindowId>,
 }
 
 impl Interaction {
     /// New, with the channel that delivers commands to the engine loop.
-    pub fn new(commands: mpsc::UnboundedSender<Command>) -> Self {
+    pub fn new(commands: mpsc::UnboundedSender<UiMsg>, grab: Arc<AtomicBool>) -> Self {
         Self {
             cursor: None,
             bar: Bar::default(),
@@ -112,6 +133,87 @@ impl Interaction {
             press: None,
             drag: None,
             commands,
+            grab,
+            mods: 0,
+            hovered: None,
+        }
+    }
+
+    fn send(&self, cmd: Command) {
+        let _ = self.commands.send(UiMsg::Command(cmd));
+    }
+
+    /// Is Perch holding the physical mouse/keyboard?
+    pub fn grabbed(&self) -> bool {
+        self.grab.load(Ordering::Relaxed)
+    }
+
+    /// Events from the grabbed physical devices (one frame's worth). Motion
+    /// moves the spatial pointer; over an application window, clicks,
+    /// scrolls and keys go to that application (Alt + left button instead
+    /// grabs the window to re-arrange it); over the bar they drive the bar.
+    pub fn device_events(&mut self, events: &[InputEvent], ctx: &FrameCtx, engine: &mut Engine) {
+        let mut forward: Vec<(WindowId, InputEvent)> = Vec::new();
+        let mut moved = false;
+        for ev in events {
+            match *ev {
+                InputEvent::MouseMove { dx, dy } => {
+                    let (x, y) = self
+                        .cursor
+                        .unwrap_or((ctx.panel.0 as f32 / 2.0, ctx.panel.1 as f32 / 2.0));
+                    let nx = (x + dx).clamp(0.0, ctx.panel.0 as f32 - 1.0);
+                    let ny = (y + dy).clamp(0.0, ctx.panel.1 as f32 - 1.0);
+                    self.cursor_moved(nx, ny, ctx, engine);
+                    moved = true;
+                }
+                InputEvent::MouseButton { button, down } => {
+                    let on_bar = self.cursor.is_some_and(|(x, y)| self.bar_hit(ctx, x, y).is_some());
+                    let perch_owns = on_bar || self.drag.is_some() || self.mods & 4 != 0 || self.hovered.is_none();
+                    if button == MouseButton::Left && perch_owns {
+                        self.button(down, ctx, engine);
+                    } else if let Some(id) = self.hovered {
+                        if down && button == MouseButton::Left && engine.ws.focused != Some(id) {
+                            self.send(Command::Focus { id });
+                        }
+                        forward.push((id, *ev));
+                    }
+                }
+                InputEvent::Scroll { .. } => {
+                    if let Some(id) = self.hovered {
+                        forward.push((id, *ev));
+                    }
+                }
+                InputEvent::Key { mods, .. } => {
+                    self.mods = mods;
+                    if let Some(id) = engine.ws.focused {
+                        forward.push((id, *ev));
+                    }
+                }
+                InputEvent::MouseMoveAbs { .. } | InputEvent::Text { .. } => {}
+            }
+        }
+        // Pointer position for the application under the spatial pointer,
+        // once per frame.
+        if moved {
+            if let (Some(id), Some((x, y))) = (self.hovered, self.cursor) {
+                if self.drag.is_none() {
+                    let (vx, vy) = ctx.view_xy(x, y);
+                    if let Some((u, v)) = ctx.window_uv(id, vx, vy) {
+                        forward.insert(0, (id, InputEvent::MouseMoveAbs { x: u, y: v }));
+                    }
+                }
+            }
+        }
+        // Batch per window, preserving order.
+        let mut batches: Vec<(WindowId, Vec<InputEvent>)> = Vec::new();
+        for (id, ev) in forward {
+            match batches.last_mut() {
+                Some((last, evs)) if *last == id => evs.push(ev),
+                _ => batches.push((id, vec![ev])),
+            }
+        }
+        for (window, events) in batches {
+            let _ = self.commands.send(UiMsg::Input { window, events });
         }
     }
 
@@ -133,6 +235,12 @@ impl Interaction {
     pub fn cursor_moved(&mut self, x: f32, y: f32, ctx: &FrameCtx, engine: &mut Engine) {
         self.cursor = Some((x, y));
         self.bar_hover = self.bar_hit(ctx, x, y);
+        self.hovered = if self.bar_hover.is_some() || y >= self.bar_top(ctx) {
+            None
+        } else {
+            let (vx, vy) = ctx.view_xy(x, y);
+            ctx.topmost_window_at(vx, vy)
+        };
         if let Some(p) = &self.press {
             if self.drag.is_none() && ((x - p.x).powi(2) + (y - p.y).powi(2)).sqrt() > DRAG_THRESHOLD_PX {
                 let id = p.id;
@@ -155,6 +263,7 @@ impl Interaction {
     /// Pointer left our output.
     pub fn cursor_left(&mut self, engine: &mut Engine) {
         self.cursor = None;
+        self.hovered = None;
         self.bar_hover = None;
         self.bar_pressed = None;
         self.finish_drag(engine);
@@ -173,7 +282,7 @@ impl Interaction {
             if let Some(id) = ctx.topmost_window_at(vx, vy) {
                 self.press = Some(Press { id, x, y });
                 if engine.ws.focused != Some(id) {
-                    let _ = self.commands.send(Command::Focus { id });
+                    self.send(Command::Focus { id });
                 }
             }
         } else {
@@ -201,7 +310,7 @@ impl Interaction {
             },
             None => Command::PlaceWindow { id: d.id, placement },
         };
-        let _ = self.commands.send(cmd);
+        self.send(cmd);
     }
 
     fn run(&mut self, action: BarAction, engine: &Engine) {
@@ -247,12 +356,17 @@ impl Interaction {
             }
             BarAction::Clear => {
                 for w in &engine.ws.windows {
-                    let _ = self.commands.send(Command::RemoveWindow { id: w.id });
+                    self.send(Command::RemoveWindow { id: w.id });
                 }
                 return;
             }
+            BarAction::Grab => {
+                let now = !self.grab.load(Ordering::Relaxed);
+                self.grab.store(now, Ordering::Relaxed);
+                return;
+            }
         };
-        let _ = self.commands.send(cmd);
+        self.send(cmd);
     }
 
     /// Ghost outlines + insertion guide for the current drag (world
@@ -289,8 +403,8 @@ impl Interaction {
     pub fn screen_overlay(
         &mut self,
         ctx: &FrameCtx,
-        engine_grid_rows: u32,
-        grid_distance: f32,
+        windows: u32,
+        grid: &perch_proto::Grid,
         comp: &mut perch_compositor::Compositor,
     ) -> Vec<ScreenQuad> {
         if !self.textures_uploaded {
@@ -300,10 +414,19 @@ impl Interaction {
             self.textures_uploaded = true;
         }
         let view_w = ctx.view_w() as u32;
-        let status = format!("{} ROWS  {:.1} M", engine_grid_rows, grid_distance);
-        let key = (view_w, self.bar_hover, self.bar_pressed, status.clone());
+        let info = BarInfo {
+            clock: chrono::Local::now()
+                .format("%H:%M  %a %-d %b")
+                .to_string()
+                .to_uppercase(),
+            windows,
+            rows: grid.rows,
+            distance_cm: (grid.distance * 100.0).round() as u32,
+            grabbed: self.grabbed(),
+        };
+        let key = (view_w, self.bar_hover, self.bar_pressed, info.clone());
         if self.bar_uploaded.as_ref() != Some(&key) {
-            let data = self.bar.render(view_w, self.bar_hover, self.bar_pressed, &status);
+            let data = self.bar.render(view_w, self.bar_hover, self.bar_pressed, &info);
             comp.upload(
                 BAR_ID,
                 &Frame::Rgba {

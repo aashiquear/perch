@@ -226,6 +226,16 @@ impl Engine {
                 }
                 Err(e) => fx.push(err(&e.to_string())),
             },
+            Command::SetWindowSpan { id, span } => match self.ws.set_span(id, span) {
+                Ok(moved) => {
+                    for m in moved {
+                        if let Some(w) = self.ws.get(m) {
+                            fx.push(Effect::Broadcast(Event::WindowChanged(w.clone())));
+                        }
+                    }
+                }
+                Err(e) => fx.push(err(&e.to_string())),
+            },
             Command::SetWindowPixels { id, width, height } => {
                 if self.ws.get(id).is_none() {
                     fx.push(err("no such window"));

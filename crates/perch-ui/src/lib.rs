@@ -7,5 +7,6 @@
 
 pub mod bar;
 pub mod font;
+pub mod icons;
 
-pub use bar::{Bar, BarAction, Button, Rect};
+pub use bar::{Bar, BarAction, BarInfo, Button, Rect};

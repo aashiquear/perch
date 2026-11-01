@@ -1,5 +1,13 @@
 # Changelog (Claude Code sessions) — newest first
 
+- 2026-11-01 M3 core + UI: evdev grab thread (Scroll Lock / GRAB tile / panel toggle), spatial
+  pointer forwards clicks/scroll/keys to the app under it (`UiMsg::Input`), uinput absolute
+  "Perch Virtual Pointer" device + `AbsTarget` mapping from portal monitor position/size and
+  GNOME `DisplayConfig.GetCurrentState`; Alt+drag moves windows. Bar restyled: icon pill with
+  hover labels + clock/windows/rows/distance/owner chip (`perch-ui::icons`). Window spans
+  (`set_window_span`, `grid.block_w_m`, `perch span`; protocol 1.4). egui control panel window on
+  the laptop (pick/arrange/recenter/centre/calibrate/clear/grab/grid sliders/per-window/quit).
+
 - 2026-11-01 Flow-row grid (protocol 1.3): window width from source pixels (`px_per_m`), rows re-flow
   and re-centre on every change; `set_window_pixels`; `slot_window` is (row, index). Pointer
   interaction on the glasses: click = focus, drag re-orders with insertion guide + ghost outlines

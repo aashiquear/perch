@@ -1,6 +1,6 @@
 //! Wires the control server, stream socket, device thread and engine together.
 
-use crate::capture::SharedBackend;
+use crate::capture::{SharedBackend, UiMsg};
 use crate::config::Config;
 use crate::device::{DeviceCommand, DeviceEvent, DeviceHandle};
 use crate::engine::{Effect, Engine};
@@ -74,7 +74,7 @@ pub async fn run(
     mut dev: DeviceHandle,
     mut local_sink: LocalSink,
     backend: SharedBackend,
-    mut ui_rx: mpsc::UnboundedReceiver<perch_proto::Command>,
+    mut ui_rx: mpsc::UnboundedReceiver<UiMsg>,
 ) -> anyhow::Result<()> {
     let (server, mut inbound) = ControlServer::new(self_hello(&cfg));
     let server = if cfg.pairing_token.is_empty() {
@@ -217,10 +217,38 @@ pub async fn run(
                 let fx = engine.lock().await.input(evs);
                 apply_effects(fx, &server, &dev, &mut local_sink, &engine, &backend, &pick_tx).await;
             }
-            Some(cmd) = ui_rx.recv() => {
+            Some(msg) = ui_rx.recv() => {
                 let me = cfg.peer_id;
-                let fx = engine.lock().await.command(me, cmd);
-                apply_effects(fx, &server, &dev, &mut local_sink, &engine, &backend, &pick_tx).await;
+                match msg {
+                    UiMsg::Command(cmd) => {
+                        let fx = engine.lock().await.command(me, cmd);
+                        apply_effects(fx, &server, &dev, &mut local_sink, &engine, &backend, &pick_tx).await;
+                    }
+                    UiMsg::Input { window, events } => {
+                        let source = engine.lock().await.ws.get(window).map(|w| w.source.clone());
+                        let Some(source) = source else { continue };
+                        if perch_input::source_peer(&source) == me {
+                            if let Some(sink) = local_sink.as_mut() {
+                                let target = backend.try_lock().ok().and_then(|b| {
+                                    let b = b.as_ref()?;
+                                    Some(perch_input::AbsTarget {
+                                        rect: b.source_screen_rect(&source)?,
+                                        bounds: b.screen_bounds()?,
+                                    })
+                                });
+                                sink.set_abs_target(target);
+                                for e in events {
+                                    if let Err(err) = sink.inject(e) {
+                                        tracing::debug!("inject: {err}");
+                                    }
+                                }
+                                let _ = sink.flush();
+                            }
+                        } else {
+                            server.send_to(perch_input::source_peer(&source), Message::Input { events }).await;
+                        }
+                    }
+                }
             }
             Some(outcome) = pick_rx.recv() => {
                 let fx = match outcome {

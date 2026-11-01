@@ -41,3 +41,8 @@
   One PipeWire main loop per stream, latest frame wins. DMA-BUF import is a later optimisation,
   not a prerequisite — 1–3 windows at 1080p copy fine. The engine places picked windows
   (`add_picked_windows`) and is idempotent so restore after restart adds nothing new.
+- 2026-11-01 **Input grab is explicit, never automatic.** Perch takes the physical devices only
+  via the GRAB tile / panel checkbox / Scroll Lock, because once grabbed the laptop is only
+  usable through the glasses. Absolute pointer placement uses a separate uinput ABS device
+  (0..65535 over the whole desktop, like a VM tablet); relative fallback when the target's
+  screen rect is unknown (portal window streams).

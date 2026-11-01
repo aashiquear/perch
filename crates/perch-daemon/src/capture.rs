@@ -9,6 +9,22 @@ use uuid::Uuid;
 /// Shared handle.
 pub type SharedBackend = Arc<Mutex<Option<Box<dyn CaptureBackend>>>>;
 
+/// What the on-glasses UI (render thread) sends to the engine loop.
+#[derive(Debug)]
+pub enum UiMsg {
+    /// A controller-style command (same as from the CLI/phone).
+    Command(perch_proto::Command),
+    /// Raw input for the application behind a window: the spatial pointer is
+    /// over `window` (or it is focused, for keys). `MouseMoveAbs` is
+    /// normalised to the window.
+    Input {
+        /// Target window.
+        window: perch_proto::WindowId,
+        /// Events.
+        events: Vec<perch_proto::InputEvent>,
+    },
+}
+
 /// Open the platform backend, if any.
 pub fn init(peer: Uuid) -> SharedBackend {
     let b = match perch_capture::default_backend(peer) {

@@ -14,6 +14,8 @@ mod engine;
 #[cfg(feature = "render")]
 mod interact;
 #[cfg(feature = "render")]
+mod panel;
+#[cfg(feature = "render")]
 mod render;
 mod server;
 
@@ -88,8 +90,66 @@ fn main() -> anyhow::Result<()> {
     )));
     let dev = device::spawn(cfg.clone(), Some(paths.clone()), source);
     let backend = capture::init(cfg.peer_id);
-    // Commands from the on-glasses UI (pointer, control bar) → engine loop.
-    let (ui_tx, ui_rx) = tokio::sync::mpsc::unbounded_channel::<perch_proto::Command>();
+    // Commands and raw input from the on-glasses UI → engine loop.
+    let (ui_tx, ui_rx) = tokio::sync::mpsc::unbounded_channel::<capture::UiMsg>();
+    // Physical mouse/keyboard, grabbed from the OS while `grab` is set, feed
+    // the spatial pointer on the glasses. Scroll Lock toggles the grab.
+    let grab = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    #[cfg(all(target_os = "linux", feature = "linux-input", feature = "render"))]
+    let device_rx = {
+        let (tx, rx) = std::sync::mpsc::channel::<perch_proto::InputEvent>();
+        let grab = Arc::clone(&grab);
+        let panic_key = cfg.input.panic_key_usage;
+        if cfg.input.share_local_devices {
+            std::thread::Builder::new()
+                .name("perch-evdev".into())
+                .spawn(move || {
+                    use perch_input::InputSource;
+                    use std::sync::atomic::Ordering;
+                    let mut src = match perch_input::linux::EvdevSource::open_all() {
+                        Ok(s) => s,
+                        Err(e) => {
+                            tracing::warn!("physical input capture unavailable: {e}");
+                            return;
+                        }
+                    };
+                    let mut grabbed = false;
+                    loop {
+                        let want = grab.load(Ordering::Relaxed);
+                        if want != grabbed {
+                            match src.set_grabbed(want) {
+                                Ok(()) => {
+                                    grabbed = want;
+                                    tracing::info!(grabbed, "input grab");
+                                }
+                                Err(e) => {
+                                    tracing::warn!("input grab: {e}");
+                                    grab.store(grabbed, Ordering::Relaxed);
+                                }
+                            }
+                        }
+                        let ev = match src.next() {
+                            Ok(ev) => ev,
+                            Err(e) => {
+                                tracing::warn!("evdev: {e}");
+                                break;
+                            }
+                        };
+                        if let perch_proto::InputEvent::Key { usage, down: true, .. } = ev {
+                            if usage == panic_key {
+                                grab.store(!grabbed, Ordering::Relaxed);
+                                continue;
+                            }
+                        }
+                        if grabbed && tx.send(ev).is_err() {
+                            break;
+                        }
+                    }
+                })
+                .expect("spawn evdev thread");
+        }
+        rx
+    };
 
     let local_sink: server::LocalSink = {
         #[cfg(all(target_os = "linux", feature = "linux-input"))]
@@ -123,6 +183,7 @@ fn main() -> anyhow::Result<()> {
             }
             std::process::exit(0);
         });
+        let host = cfg.name.clone();
         return render::RenderApp::new(
             engine,
             tracker,
@@ -133,11 +194,18 @@ fn main() -> anyhow::Result<()> {
                 me: cfg.peer_id,
                 fps: cfg.capture.fps,
                 commands: ui_tx,
+                grab,
+                #[cfg(all(target_os = "linux", feature = "linux-input"))]
+                device_rx: Some(device_rx),
+                #[cfg(not(all(target_os = "linux", feature = "linux-input")))]
+                device_rx: None,
             },
         )
+        .with_host(host)
         .run();
     }
 
     drop(ui_tx);
+    drop(grab);
     rt.block_on(server::run(cfg, engine, dev, local_sink, backend, ui_rx))
 }

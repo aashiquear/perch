@@ -37,6 +37,18 @@ pub enum InputError {
     Io(#[from] std::io::Error),
 }
 
+/// Where `MouseMoveAbs` (window-normalised 0..1) lands on the target OS's
+/// screen: the window's rectangle and the whole desktop's extent, both in
+/// the OS's logical pixels. Without it a sink has to fall back to relative
+/// motion.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct AbsTarget {
+    /// Window/monitor rectangle on the desktop: x, y, width, height.
+    pub rect: (f32, f32, f32, f32),
+    /// Desktop extent (all outputs): width, height.
+    pub bounds: (f32, f32),
+}
+
 /// Something that can inject events into an OS (local uinput, or a proxy that
 /// forwards to a remote peer).
 pub trait InputSink: Send {
@@ -46,6 +58,8 @@ pub trait InputSink: Send {
     fn flush(&mut self) -> Result<(), InputError> {
         Ok(())
     }
+    /// Tell the sink where subsequent `MouseMoveAbs` events map to.
+    fn set_abs_target(&mut self, _target: Option<AbsTarget>) {}
 }
 
 /// Something that produces events from physical devices.

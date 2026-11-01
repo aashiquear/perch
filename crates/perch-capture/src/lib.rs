@@ -137,6 +137,16 @@ pub trait CaptureBackend: Send {
     fn source_size(&self, _source: &Source) -> Option<(u32, u32)> {
         None
     }
+    /// Where the source sits on the host desktop, in the OS's logical pixels
+    /// (x, y, w, h), if known. Monitors usually are; individual windows
+    /// usually are not.
+    fn source_screen_rect(&self, _source: &Source) -> Option<(f32, f32, f32, f32)> {
+        None
+    }
+    /// Extent of the whole desktop (all outputs) in logical pixels.
+    fn screen_bounds(&self) -> Option<(f32, f32)> {
+        None
+    }
 }
 
 /// Pick the backend for this OS. `peer` is our own peer id (sources are

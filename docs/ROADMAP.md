@@ -59,8 +59,15 @@ definition of done you can verify on your own hardware.
 the phone window; pushing the pointer off the right edge of the editor moves
 into the browser pinned to its right; typing on the phone touchpad lands in
 whatever is focused.
-- [ ] Linux evdev source thread in `perchd` (`share_local_devices`), grab on
-      remote focus, panic key.
+- [x] Linux evdev source thread in `perchd` (`share_local_devices`), grab on
+      demand (bar / panel / Scroll Lock), spatial pointer on the glasses,
+      absolute pointer injection for monitor captures via a uinput tablet
+      device + GNOME DisplayConfig layout (2026-11-01; needs the `input` group).
+- [ ] Verify the uinput absolute device maps to the whole desktop on Mutter;
+      per-window screen rects (needs a GNOME extension or Mutter window
+      introspection) so clicks land in window captures too.
+- [ ] Grab the pointer *only* while it is over a Perch window (edge barrier)
+      so the laptop stays usable with the glasses on.
 - [ ] Android Accessibility/IME injection polish; cursor overlay on phone.
 - [ ] Look-to-focus (gaze dwell) behind a setting.
 - [ ] Stereo (SBS) mode end-to-end with IPD setting; verify parallax comfort.

@@ -5,6 +5,7 @@
 use crate::capture::SharedBackend;
 use crate::engine::Engine;
 use crate::interact::{FrameCtx, Interaction};
+use crate::panel::{ControlPanel, PanelSnapshot};
 use perch_capture::{CaptureError, CaptureSource, TestPattern};
 use perch_compositor::{find_glasses_monitor, Compositor, Stereo};
 use perch_proto::{DisplayMode, Source, WindowId};
@@ -25,8 +26,12 @@ pub struct CaptureSetup {
     pub me: uuid::Uuid,
     /// Requested capture rate.
     pub fps: u32,
-    /// Where pointer/bar interactions send their commands.
-    pub commands: tokio::sync::mpsc::UnboundedSender<perch_proto::Command>,
+    /// Where pointer/bar interactions send their commands and forwarded input.
+    pub commands: tokio::sync::mpsc::UnboundedSender<crate::capture::UiMsg>,
+    /// Set while Perch owns the physical mouse/keyboard.
+    pub grab: Arc<std::sync::atomic::AtomicBool>,
+    /// Physical input events while grabbed.
+    pub device_rx: Option<std::sync::mpsc::Receiver<perch_proto::InputEvent>>,
 }
 
 /// Everything the render loop needs.
@@ -49,6 +54,11 @@ pub struct RenderApp {
     interact: Interaction,
     /// What the last frame used, for hit-testing pointer events.
     ctx: Option<FrameCtx>,
+    /// Desktop control window.
+    panel: Option<ControlPanel>,
+    panel_last: Instant,
+    host: String,
+    last_fps: f32,
 }
 
 /// Rolling frame-time statistics, logged every few seconds so "it feels
@@ -59,6 +69,8 @@ struct FrameStats {
     total_s: f32,
     max_s: f32,
     since: Option<Instant>,
+    /// Most recently logged fps.
+    last_fps: f32,
 }
 
 impl FrameStats {
@@ -78,6 +90,7 @@ impl FrameStats {
             );
             *self = Self {
                 since: Some(now),
+                last_fps: fps,
                 ..Default::default()
             };
         }
@@ -94,6 +107,7 @@ impl RenderApp {
         capture: CaptureSetup,
     ) -> Self {
         let capture_commands = capture.commands.clone();
+        let grab = Arc::clone(&capture.grab);
         Self {
             engine,
             tracker,
@@ -106,9 +120,33 @@ impl RenderApp {
             capture,
             last_frame: Instant::now(),
             stats: FrameStats::default(),
-            interact: Interaction::new(capture_commands),
+            interact: Interaction::new(capture_commands, grab),
             ctx: None,
+            panel: None,
+            panel_last: Instant::now(),
+            host: String::new(),
+            last_fps: 0.0,
         }
+    }
+
+    /// Host name shown in the panel's sharing section.
+    pub fn with_host(mut self, host: String) -> Self {
+        self.host = host;
+        self
+    }
+
+    fn draw_panel(&mut self) {
+        let Some(panel) = self.panel.as_mut() else { return };
+        let snap = {
+            let e = self.engine.blocking_lock();
+            PanelSnapshot {
+                state: e.state(),
+                fps: self.last_fps,
+                gaze: perch_space::gaze_angles(&e.pose),
+                host: self.host.clone(),
+            }
+        };
+        panel.draw(&snap);
     }
 
     /// Open a capture for `w`, or a test pattern if that isn't possible.
@@ -187,6 +225,16 @@ impl RenderApp {
         let dt = now.duration_since(self.last_frame).as_secs_f32().min(0.1);
         self.last_frame = now;
         self.stats.add(dt);
+        self.last_fps = self.stats.last_fps;
+
+        // Physical input while grabbed drives the spatial pointer.
+        if let (Some(rx), Some(ctx)) = (self.capture.device_rx.as_ref(), self.ctx.clone()) {
+            let batch: Vec<perch_proto::InputEvent> = std::iter::from_fn(|| rx.try_recv().ok()).collect();
+            if !batch.is_empty() {
+                let mut e = self.engine.blocking_lock();
+                self.interact.device_events(&batch, &ctx, &mut e);
+            }
+        }
 
         // Predicted pose for this frame.
         let pose = self.tracker.lock().unwrap().pose_predicted(0.0);
@@ -248,7 +296,8 @@ impl RenderApp {
         }
         // … then screen-space overlay (bar, pointer) per eye.
         let ctx = self.ctx.clone().expect("just set");
-        let screen = self.interact.screen_overlay(&ctx, grid.rows, grid.distance, comp);
+        let n_windows = ctx.quads.len() as u32;
+        let screen = self.interact.screen_overlay(&ctx, n_windows, &grid, comp);
         let res = if stereo {
             if let Stereo::SideBySide { ipd_m } = self.stereo {
                 // Parallax: shift each eye's view by ±ipd/2 horizontally. For a
@@ -331,9 +380,25 @@ impl ApplicationHandler for RenderApp {
             Err(e) => tracing::error!("compositor init failed: {e}"),
         }
         self.window = Some(window);
+        match ControlPanel::new(el, self.capture.commands.clone(), Arc::clone(&self.capture.grab)) {
+            Ok(p) => self.panel = Some(p),
+            Err(e) => tracing::warn!("control panel unavailable: {e}"),
+        }
     }
 
-    fn window_event(&mut self, el: &ActiveEventLoop, _id: WinitWindowId, event: WindowEvent) {
+    fn window_event(&mut self, el: &ActiveEventLoop, id: WinitWindowId, event: WindowEvent) {
+        if self.panel.as_ref().is_some_and(|p| p.id() == id) {
+            let redraw = self.panel.as_mut().expect("checked").on_event(&event);
+            if redraw {
+                self.draw_panel();
+            }
+            if self.panel.as_ref().is_some_and(|p| p.quit) {
+                tracing::info!("quit from control panel");
+                self.engine.blocking_lock().save();
+                el.exit();
+            }
+            return;
+        }
         match event {
             WindowEvent::CloseRequested => el.exit(),
             WindowEvent::Resized(s) => {
@@ -383,6 +448,13 @@ impl ApplicationHandler for RenderApp {
     fn about_to_wait(&mut self, _el: &ActiveEventLoop) {
         if let Some(w) = &self.window {
             w.request_redraw();
+        }
+        // The panel is a desktop window: 20 Hz is plenty.
+        if self.panel_last.elapsed() >= std::time::Duration::from_millis(50) {
+            self.panel_last = Instant::now();
+            if let Some(p) = &self.panel {
+                p.request_redraw();
+            }
         }
     }
 }

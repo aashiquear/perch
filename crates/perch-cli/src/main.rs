@@ -92,6 +92,9 @@ enum Cmd {
         /// Widest a window may be.
         #[arg(long)]
         max_w: Option<f32>,
+        /// Width of one layout block (for `perch span`).
+        #[arg(long)]
+        block_w: Option<f32>,
         /// Re-flow every visible window into the rows afterwards.
         #[arg(long)]
         arrange: bool,
@@ -100,6 +103,8 @@ enum Cmd {
     Slot { id: String, row: u32, index: u32 },
     /// Set a window's source pixel size (drives its width in the grid).
     Size { id: String, width: u32, height: u32 },
+    /// Make a window N layout blocks wide (0 = automatic from its pixels).
+    Span { id: String, blocks: u32 },
     /// Snap every visible window into the grid, row-major.
     Arrange,
     /// Pin a window where you're looking.
@@ -268,6 +273,7 @@ async fn main() -> anyhow::Result<()> {
             pitch,
             px_per_m,
             max_w,
+            block_w,
             arrange,
         } => {
             let mut g = state.grid;
@@ -285,6 +291,7 @@ async fn main() -> anyhow::Result<()> {
             set!(gap_m, gap);
             set!(px_per_m, px_per_m);
             set!(max_w_m, max_w);
+            set!(block_w_m, block_w);
             set!(distance, distance);
             set!(center_yaw, yaw.map(f32::to_radians));
             set!(center_pitch, pitch.map(f32::to_radians));
@@ -356,6 +363,10 @@ async fn main() -> anyhow::Result<()> {
             id: resolve_id(&id, &ids)?,
             row,
             index,
+        },
+        Cmd::Span { id, blocks } => Command::SetWindowSpan {
+            id: resolve_id(&id, &ids)?,
+            span: blocks,
         },
         Cmd::Size { id, width, height } => Command::SetWindowPixels {
             id: resolve_id(&id, &ids)?,
