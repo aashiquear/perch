@@ -28,7 +28,7 @@ use std::fmt;
 use uuid::Uuid;
 
 /// Protocol version. Bump `MAJOR` on any incompatible wire change.
-pub const PROTOCOL_VERSION: Version = Version { major: 1, minor: 0 };
+pub const PROTOCOL_VERSION: Version = Version { major: 1, minor: 2 };
 
 /// Semantic version of the wire protocol.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -247,6 +247,47 @@ pub struct Placement {
     pub width_m: f32,
     /// Physical height in metres at `distance`.
     pub height_m: f32,
+}
+
+/// A grid of slots on a sphere around the head that windows snap to. Slots
+/// are `cols × rows` cells of `cell_w_m × cell_h_m` metres separated by
+/// `gap_m`, laid out flat at `distance` and then wrapped onto the sphere
+/// (each cell centre becomes a yaw/pitch). Column 0 is leftmost, row 0 is
+/// the top. Since 1.2.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Grid {
+    /// Columns.
+    pub cols: u32,
+    /// Rows.
+    pub rows: u32,
+    /// Cell width, metres.
+    pub cell_w_m: f32,
+    /// Cell height, metres.
+    pub cell_h_m: f32,
+    /// Gap between cells, metres.
+    pub gap_m: f32,
+    /// Distance of the grid from the head, metres.
+    pub distance: f32,
+    /// Yaw of the grid centre, radians, + = left.
+    pub center_yaw: f32,
+    /// Pitch of the grid centre, radians, + = up.
+    pub center_pitch: f32,
+}
+
+impl Default for Grid {
+    fn default() -> Self {
+        Self {
+            cols: 3,
+            rows: 1,
+            cell_w_m: 1.2,
+            cell_h_m: 0.8,
+            gap_m: 0.1,
+            distance: 2.0,
+            center_yaw: 0.0,
+            center_pitch: 0.0,
+        }
+    }
 }
 
 impl Placement {
@@ -518,6 +559,30 @@ pub enum Command {
     },
     /// Request a full state snapshot.
     GetState,
+    /// Ask the host to let the user pick local windows/monitors to capture
+    /// (on Linux this opens the desktop portal dialog). Each pick becomes a
+    /// new window placed near the current gaze; `window_changed` events
+    /// follow, or an `error` if the user cancelled. Since 1.1.
+    PickSources {
+        /// Allow selecting several sources at once.
+        multiple: bool,
+    },
+    /// Replace the slot grid and re-place every slotted window. Since 1.2.
+    SetGrid {
+        /// New grid.
+        grid: Grid,
+    },
+    /// Snap a window into grid slot (`col`, `row`). Since 1.2.
+    SlotWindow {
+        /// Window.
+        id: WindowId,
+        /// Column, 0 = leftmost.
+        col: u32,
+        /// Row, 0 = top.
+        row: u32,
+    },
+    /// Put every visible window into the grid, row-major, in z order. Since 1.2.
+    ArrangeGrid,
 }
 
 /// Events the host broadcasts to controllers.
@@ -575,6 +640,9 @@ pub struct State {
     pub layouts: Vec<String>,
     /// Focused window.
     pub focused: Option<WindowId>,
+    /// The slot grid. Since 1.2 (older hosts omit it; default applies).
+    #[serde(default)]
+    pub grid: Grid,
 }
 
 // ---------------------------------------------------------------------------
@@ -674,6 +742,21 @@ mod tests {
         });
         let s = m.to_json().unwrap();
         assert!(s.contains("\"cmd\":\"place_window\""));
+        assert_eq!(Message::from_json(&s).unwrap(), m);
+
+        // Since 1.2.
+        let m = Message::Command(Command::SlotWindow { id, col: 2, row: 0 });
+        let s = m.to_json().unwrap();
+        assert!(s.contains("\"cmd\":\"slot_window\""));
+        assert_eq!(Message::from_json(&s).unwrap(), m);
+        let g: Grid = serde_json::from_str("{\"cols\":4}").unwrap();
+        assert_eq!(g.cols, 4);
+        assert_eq!(g.rows, Grid::default().rows);
+
+        // Since 1.1.
+        let m = Message::Command(Command::PickSources { multiple: true });
+        let s = m.to_json().unwrap();
+        assert_eq!(s, r#"{"msg":"command","cmd":"pick_sources","multiple":true}"#);
         assert_eq!(Message::from_json(&s).unwrap(), m);
     }
 

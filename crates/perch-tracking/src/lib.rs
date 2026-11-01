@@ -88,6 +88,16 @@ pub struct TrackerConfig {
     /// passes to [`Tracker::pose_predicted`]. Rokid Max display delay is
     /// ~13 ms per `ar-drivers`.
     pub base_latency_s: f32,
+    /// Stationary calibration is rejected if the peak angular rate during the
+    /// run exceeds this (deg/s) above the mean. Measured on a real desk the
+    /// Max sees 2–4 °/s vibration peaks at 444 Hz while visibly still, so the
+    /// default is deliberately loose; real head motion is tens of °/s.
+    #[serde(default = "default_calib_max_rate_deg_s")]
+    pub calib_max_rate_deg_s: f32,
+}
+
+fn default_calib_max_rate_deg_s() -> f32 {
+    5.0
 }
 
 impl Default for TrackerConfig {
@@ -100,6 +110,7 @@ impl Default for TrackerConfig {
             kp_mag: 0.05,
             max_dt: 0.1,
             base_latency_s: 0.013,
+            calib_max_rate_deg_s: default_calib_max_rate_deg_s(),
         }
     }
 }
@@ -133,6 +144,8 @@ pub struct Tracker {
     calib: Option<CalibRun>,
     state: CalibrationState,
     samples_seen: u64,
+    /// Peak |gyro| of the most recently finished calibration run (rad/s).
+    last_calib_peak_rate: f32,
 }
 
 impl Tracker {
@@ -155,12 +168,20 @@ impl Tracker {
             calib: None,
             state,
             samples_seen: 0,
+            last_calib_peak_rate: 0.0,
         }
     }
 
     /// Current calibration (gyro bias etc.), suitable for persisting.
     pub fn calibration(&self) -> Calibration {
         self.cal
+    }
+
+    /// Peak angular rate (rad/s) seen during the last finished calibration
+    /// run, accepted or rejected. Useful for telling the user *why* a run was
+    /// rejected.
+    pub fn last_calibration_peak_rate(&self) -> f32 {
+        self.last_calib_peak_rate
     }
 
     /// Current calibration state for the UI.
@@ -180,7 +201,7 @@ impl Tracker {
 
     /// Begin a stationary calibration lasting `seconds`. The glasses must not
     /// move; the run is rejected (state goes back to the previous value) if the
-    /// peak angular rate exceeds ~2°/s.
+    /// peak angular rate exceeds [`TrackerConfig::calib_max_rate_deg_s`].
     pub fn start_calibration(&mut self, seconds: f32) {
         self.calib = Some(CalibRun {
             start_us: self.last_t_us.unwrap_or(0),
@@ -217,7 +238,9 @@ impl Tracker {
             self.state = CalibrationState::Calibrating { percent: pct };
             if elapsed >= run.duration_us {
                 let run = self.calib.take().unwrap();
-                let moved = run.max_rate > 2.0f32.to_radians() + run.sum_gyro.norm() as f32 / run.n as f32;
+                self.last_calib_peak_rate = run.max_rate;
+                let moved = run.max_rate
+                    > self.cfg.calib_max_rate_deg_s.to_radians() + run.sum_gyro.norm() as f32 / run.n as f32;
                 if moved || run.n < 50 {
                     // Rejected: keep the old calibration.
                     self.state = if self.cal.samples > 0 {
@@ -473,6 +496,36 @@ mod tests {
         }
         assert_eq!(t.calibration_state(), CalibrationState::Uncalibrated);
         assert_eq!(t.calibration().samples, 0);
+    }
+
+    /// Measured on a Rokid Max resting on a desk (2026-10-31): visibly still,
+    /// yet raw gyro peaks of 2–4 °/s from desk/cable vibration. That must not
+    /// reject a run; a real nudge (≫ threshold) must.
+    #[test]
+    fn calibration_tolerates_desk_vibration_but_not_a_nudge() {
+        let bias = Vector3::new(0.0, 0.0044, -0.0003);
+        let mut t = Tracker::new(TrackerConfig::default(), Calibration::none());
+        t.start_calibration(1.0);
+        for i in 0..1200u64 {
+            // 3.5 °/s peak-to-zero wobble on z, like the desk measurement.
+            let wobble = 3.5f32.to_radians() * ((i as f32) * 0.3).sin();
+            t.feed(still_sample(i * 2250, bias + Vector3::new(0.0, 0.0, wobble)));
+        }
+        assert_eq!(t.calibration_state(), CalibrationState::Ready);
+        assert!((t.calibration().gyro_bias.y - bias.y).abs() < 1e-3);
+
+        let strict = TrackerConfig {
+            calib_max_rate_deg_s: 2.0,
+            ..Default::default()
+        };
+        let mut t = Tracker::new(strict, Calibration::none());
+        t.start_calibration(1.0);
+        for i in 0..1200u64 {
+            let wobble = 3.5f32.to_radians() * ((i as f32) * 0.3).sin();
+            t.feed(still_sample(i * 2250, bias + Vector3::new(0.0, 0.0, wobble)));
+        }
+        assert_eq!(t.calibration_state(), CalibrationState::Uncalibrated);
+        assert!(t.last_calibration_peak_rate() > 3.0f32.to_radians());
     }
 
     #[test]

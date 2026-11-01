@@ -57,3 +57,22 @@ IMU 1 ms → fusion 0.01 ms → predict to scan-out (+13 ms device, +4 ms margin
 - Curved mega-screen — the Breezy-style single huge canvas is nice for video;
   for work, discrete windows you can pin are better. Can be a preset later.
 - Drawing a 3D "room".
+
+## The slot grid (since 1.2)
+
+Windows snap to a grid of cells on a sphere around the head: `cols × rows`
+cells of `cell_w × cell_h` metres with `gap` between them, `distance` away,
+centred at (`yaw`, `pitch`). Defaults: 3 × 1, 1.2 × 0.8 m, 0.1 m gap, 2 m.
+Each cell centre is wrapped onto the sphere, so a 3-wide grid curves around
+you rather than flattening at the edges. A window keeps its aspect ratio
+and is fitted inside its cell.
+
+- `perch pick` drops each new window into the next free slot (row-major);
+  once the grid is full, windows fan out to the right of where you looked.
+- `perch grid` prints the grid; `perch grid --cols 3 --rows 2 --cell-w 1.1
+  --cell-h 0.7 --gap 0.08 --distance 2 --yaw 0 --pitch -5 --arrange`
+  changes it and snaps everything in.
+- `perch slot <id> 2 0` moves a window to column 2, row 0 (evicting the
+  previous occupant from the slot, not from space).
+- `perch place` / `perch pin` take a window *out* of the grid.
+- The grid is saved with the workspace.

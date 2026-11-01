@@ -62,7 +62,16 @@ survive a resize (it does: `Compositor::resize`).
 ## Tracking tips
 
 - **Calibrate once per glasses** with them flat on a table for 30 s
-  (`perch calibrate`). Bias is saved per serial.
+  (`perch calibrate`). Bias is saved per serial. Measured 2026-10-31: raw yaw
+  bias ≈ 15 °/min, 0.08 °/min after calibration. A desk that looks still still
+  shows 2–4 °/s gyro peaks; the reject gate is `tracker.calib_max_rate_deg_s`
+  (default 5). A rejected run is reported as an `error` event.
+- **IMU rate is 444 Hz on Max** (measured; ar-drivers' "1 kHz" is not what the
+  device sends). The first ~9 packets after claiming the interface are stale
+  (boot-clock timestamps, ±40 rad/s gyro) — ignore them.
+- **120 Hz**: `perch mode mono120` switches the glasses, but the host keeps
+  its selected mode. On GNOME: `gdctl set … -M DP-5 -m 1920x1080@120.000`.
+  EDID also offers 1920×1200@120.
 - 120 Hz mode noticeably reduces perceived lag (spidgets note).
 - If the pinned image moves the *wrong* way, the axis convention differs from
   what we expect — XRLinuxDriver exposes `--invert-y --invert-z` for some

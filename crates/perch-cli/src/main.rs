@@ -55,6 +55,48 @@ enum Cmd {
     Preset { name: String },
     /// List windows.
     Windows,
+    /// Pick local windows/monitors to show in the glasses (opens the desktop
+    /// portal dialog on the host). New windows appear where you are looking.
+    Pick {
+        /// Let the dialog select several sources at once.
+        #[arg(long)]
+        multiple: bool,
+    },
+    /// Remove a window.
+    Remove { id: String },
+    /// Remove every window.
+    Clear,
+    /// Show or change the slot grid (lengths in metres, angles in degrees).
+    /// With no options, prints it. `--arrange` also snaps every window in.
+    Grid {
+        #[arg(long)]
+        cols: Option<u32>,
+        #[arg(long)]
+        rows: Option<u32>,
+        /// Cell width.
+        #[arg(long)]
+        cell_w: Option<f32>,
+        /// Cell height.
+        #[arg(long)]
+        cell_h: Option<f32>,
+        #[arg(long)]
+        gap: Option<f32>,
+        #[arg(long)]
+        distance: Option<f32>,
+        /// Grid centre yaw (+ = left).
+        #[arg(long)]
+        yaw: Option<f32>,
+        /// Grid centre pitch (+ = up).
+        #[arg(long)]
+        pitch: Option<f32>,
+        /// Snap every visible window into the grid afterwards.
+        #[arg(long)]
+        arrange: bool,
+    },
+    /// Snap a window into grid slot COL ROW (0-based; col 0 = left, row 0 = top).
+    Slot { id: String, col: u32, row: u32 },
+    /// Snap every visible window into the grid, row-major.
+    Arrange,
     /// Pin a window where you're looking.
     Pin { id: String },
     /// Place a window (angles in degrees, sizes in metres).
@@ -212,6 +254,80 @@ async fn main() -> anyhow::Result<()> {
             print_windows(&state);
             return Ok(());
         }
+        Cmd::Grid {
+            cols,
+            rows,
+            cell_w,
+            cell_h,
+            gap,
+            distance,
+            yaw,
+            pitch,
+            arrange,
+        } => {
+            let mut g = state.grid;
+            let mut changed = false;
+            macro_rules! set {
+                ($field:ident, $val:expr) => {
+                    if let Some(v) = $val {
+                        g.$field = v;
+                        changed = true;
+                    }
+                };
+            }
+            set!(cols, cols);
+            set!(rows, rows);
+            set!(cell_w_m, cell_w);
+            set!(cell_h_m, cell_h);
+            set!(gap_m, gap);
+            set!(distance, distance);
+            set!(center_yaw, yaw.map(f32::to_radians));
+            set!(center_pitch, pitch.map(f32::to_radians));
+            if changed {
+                c.send(Message::Command(Command::SetGrid { grid: g }));
+            }
+            if arrange {
+                c.send(Message::Command(Command::ArrangeGrid));
+            }
+            let mut latest = state.clone();
+            let mut want = usize::from(changed) + usize::from(arrange);
+            let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
+            while want > 0 {
+                match tokio::time::timeout_at(deadline, c.recv()).await {
+                    Ok(Some(Message::Event(Event::State(s)))) => {
+                        latest = s;
+                        want -= 1;
+                    }
+                    Ok(Some(Message::Event(Event::Error { message }))) => anyhow::bail!("perchd: {message}"),
+                    Ok(Some(_)) => continue,
+                    _ => break,
+                }
+            }
+            print_grid(&latest);
+            if arrange {
+                print_windows(&latest);
+            }
+            c.close().await;
+            return Ok(());
+        }
+        Cmd::Clear => {
+            let n = state.windows.len();
+            for w in &state.windows {
+                c.send(Message::Command(Command::RemoveWindow { id: w.id }));
+            }
+            let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
+            let mut removed = 0;
+            while removed < n {
+                match tokio::time::timeout_at(deadline, c.recv()).await {
+                    Ok(Some(Message::Event(Event::WindowRemoved { .. }))) => removed += 1,
+                    Ok(Some(_)) => continue,
+                    _ => break,
+                }
+            }
+            println!("removed {removed} of {n} windows");
+            c.close().await;
+            return Ok(());
+        }
         Cmd::Watch => {
             while let Some(m) = c.recv().await {
                 println!("{}", m.to_json()?);
@@ -227,6 +343,16 @@ async fn main() -> anyhow::Result<()> {
             mode: parse_mode(&mode)?,
         },
         Cmd::Preset { name } => Command::ApplyPreset { name },
+        Cmd::Pick { multiple } => Command::PickSources { multiple },
+        Cmd::Remove { id } => Command::RemoveWindow {
+            id: resolve_id(&id, &ids)?,
+        },
+        Cmd::Slot { id, col, row } => Command::SlotWindow {
+            id: resolve_id(&id, &ids)?,
+            col,
+            row,
+        },
+        Cmd::Arrange => Command::ArrangeGrid,
         Cmd::Pin { id } => Command::PinHere {
             id: resolve_id(&id, &ids)?,
         },
@@ -264,6 +390,7 @@ async fn main() -> anyhow::Result<()> {
         } => Command::LoadLayout { name },
         Cmd::Record { .. } | Cmd::Discover => unreachable!(),
     };
+    let is_pick = matches!(cmd, Command::PickSources { .. });
     let fire_and_forget = matches!(
         cmd,
         Command::Recenter | Command::Calibrate { .. } | Command::SetDisplayMode { .. } | Command::SetBrightness { .. }
@@ -273,8 +400,16 @@ async fn main() -> anyhow::Result<()> {
         println!("ok");
     } else {
         // Wait for the event this command produces; ignore pose ticks and the
-        // join-time state broadcast.
-        let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
+        // join-time state broadcast. A pick waits for the user in the dialog.
+        let wait = if is_pick {
+            Duration::from_secs(300)
+        } else {
+            Duration::from_secs(2)
+        };
+        let deadline = tokio::time::Instant::now() + wait;
+        if is_pick {
+            println!("choose window(s) in the dialog on the host…");
+        }
         loop {
             match tokio::time::timeout_at(deadline, c.recv()).await {
                 Ok(Some(Message::Event(Event::Pose(_)))) => continue,
@@ -287,6 +422,25 @@ async fn main() -> anyhow::Result<()> {
                         w.placement.pitch.to_degrees(),
                         w.anchor
                     );
+                    if is_pick {
+                        // Several windows may follow one pick; drain briefly.
+                        let quiet = tokio::time::Instant::now() + Duration::from_millis(500);
+                        while let Ok(Some(m)) = tokio::time::timeout_at(quiet, c.recv()).await {
+                            if let Message::Event(Event::WindowChanged(w)) = m {
+                                println!(
+                                    "window {} → yaw {:.1}° pitch {:.1}° {:?}",
+                                    &w.id.to_string()[..8],
+                                    w.placement.yaw.to_degrees(),
+                                    w.placement.pitch.to_degrees(),
+                                    w.anchor
+                                );
+                            }
+                        }
+                    }
+                    break;
+                }
+                Ok(Some(Message::Event(Event::WindowRemoved { id }))) => {
+                    println!("removed {}", &id.to_string()[..8]);
                     break;
                 }
                 Ok(Some(Message::Event(Event::FocusChanged { id }))) => {
@@ -314,7 +468,7 @@ async fn main() -> anyhow::Result<()> {
                 }
                 Ok(Some(_)) => continue,
                 _ => {
-                    println!("ok (no confirmation within 2 s)");
+                    println!("ok (no confirmation within {} s)", wait.as_secs());
                     break;
                 }
             }
@@ -322,6 +476,21 @@ async fn main() -> anyhow::Result<()> {
     }
     c.close().await;
     Ok(())
+}
+
+fn print_grid(state: &perch_proto::State) {
+    let g = &state.grid;
+    println!(
+        "grid: {}×{} cells {:.2}×{:.2} m, gap {:.2} m, {:.1} m away, centre yaw {:.1}° pitch {:.1}°",
+        g.cols,
+        g.rows,
+        g.cell_w_m,
+        g.cell_h_m,
+        g.gap_m,
+        g.distance,
+        g.center_yaw.to_degrees(),
+        g.center_pitch.to_degrees()
+    );
 }
 
 fn print_windows(state: &perch_proto::State) {

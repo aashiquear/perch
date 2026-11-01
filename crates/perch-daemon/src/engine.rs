@@ -34,6 +34,12 @@ pub enum Effect {
     SetDisplayMode(DisplayMode),
     /// Ask the HAL to set brightness.
     SetBrightness(u8),
+    /// Open the platform's source picker (portal dialog) and add what the
+    /// user chose via [`Engine::add_picked_windows`].
+    PickSources {
+        /// Allow several sources at once.
+        multiple: bool,
+    },
 }
 
 /// Engine state.
@@ -56,6 +62,10 @@ pub struct Engine {
     pub calibration: CalibrationState,
     /// Known peers by id.
     pub peers: HashMap<Uuid, Hello>,
+    /// Gaze yaw when the last `pick_sources` arrived — the user then looks
+    /// down at the laptop to use the dialog, so the pose at completion time
+    /// is the wrong place for the new windows.
+    pick_yaw: Option<f32>,
     paths: Option<Paths>,
 }
 
@@ -79,6 +89,7 @@ impl Engine {
             display_mode: None,
             calibration: CalibrationState::Uncalibrated,
             peers,
+            pick_yaw: None,
             paths,
         }
     }
@@ -103,6 +114,7 @@ impl Engine {
             windows: self.ws.windows.clone(),
             layouts: self.ws.layouts.keys().cloned().collect(),
             focused: self.ws.focused,
+            grid: self.ws.grid,
         }
     }
 
@@ -189,6 +201,36 @@ impl Engine {
                 Err(e) => fx.push(err(&e.to_string())),
             },
             Command::GetState => fx.push(Effect::Broadcast(Event::State(self.state()))),
+            Command::PickSources { multiple } => {
+                self.pick_yaw = Some(perch_space::gaze_angles(&self.pose).0);
+                fx.push(Effect::PickSources { multiple });
+            }
+            Command::SetGrid { grid } => {
+                let moved = self.ws.set_grid(grid);
+                for id in moved {
+                    if let Some(w) = self.ws.get(id) {
+                        fx.push(Effect::Broadcast(Event::WindowChanged(w.clone())));
+                    }
+                }
+                fx.push(Effect::Broadcast(Event::State(self.state())));
+            }
+            Command::SlotWindow { id, col, row } => match self.ws.set_slot(id, col, row) {
+                Ok(()) => {
+                    // The evicted window (if any) is unchanged in placement, so
+                    // only this one needs announcing.
+                    changed = Some(id);
+                }
+                Err(e) => fx.push(err(&e.to_string())),
+            },
+            Command::ArrangeGrid => {
+                let moved = self.ws.arrange_grid();
+                for id in moved {
+                    if let Some(w) = self.ws.get(id) {
+                        fx.push(Effect::Broadcast(Event::WindowChanged(w.clone())));
+                    }
+                }
+                fx.push(Effect::Broadcast(Event::State(self.state())));
+            }
         }
         if let Some(id) = changed {
             if let Some(w) = self.ws.get(id) {
@@ -248,6 +290,102 @@ impl Engine {
     /// New pose from the tracker.
     pub fn set_pose(&mut self, p: Pose) {
         self.pose = p;
+    }
+
+    /// Where files live (None in tests).
+    pub fn paths(&self) -> Option<&Paths> {
+        self.paths.as_ref()
+    }
+
+    /// Add windows for freshly captured sources. Each goes into the next free
+    /// grid slot; once the grid is full the rest are placed at eye level in
+    /// the direction the user was looking when they asked to pick, fanning
+    /// out to the right, each sized from its pixel aspect ratio at
+    /// `height_m`. Sources that already have a window are skipped (restore
+    /// after restart), so this is idempotent. When real windows arrive, our
+    /// own `Virtual` placeholders (preset demos) go away first so their grid
+    /// slots are free.
+    pub fn add_picked_windows(&mut self, picked: Vec<(perch_proto::Source, Option<(u32, u32)>)>) -> Vec<Effect> {
+        const DISTANCE_M: f32 = 2.0;
+        const HEIGHT_M: f32 = 0.9;
+        const GAP_RAD: f32 = 0.06;
+        // Eye level, in the direction the user looked when asking to pick.
+        let gaze_yaw = self
+            .pick_yaw
+            .take()
+            .unwrap_or_else(|| perch_space::gaze_angles(&self.pose).0);
+        let gaze_pitch = 0.0;
+        let mut fx = Vec::new();
+        let mut next_yaw = gaze_yaw;
+        let mut first = true;
+        let is_new = |ws: &Workspace, s: &perch_proto::Source| !ws.windows.iter().any(|w| w.source == *s);
+        if picked.iter().any(|(s, _)| is_new(&self.ws, s)) {
+            let me = self.me.peer_id;
+            let placeholders: Vec<WindowId> = self
+                .ws
+                .windows
+                .iter()
+                .filter(|w| matches!(w.source, perch_proto::Source::Virtual { peer, .. } if peer == me))
+                .map(|w| w.id)
+                .collect();
+            for id in placeholders {
+                if self.ws.remove(id).is_ok() {
+                    fx.push(Effect::Broadcast(Event::WindowRemoved { id }));
+                }
+            }
+        }
+        for (source, size) in picked {
+            if !is_new(&self.ws, &source) {
+                continue;
+            }
+            let aspect = match size {
+                Some((w, h)) if w > 0 && h > 0 => w as f32 / h as f32,
+                _ => 16.0 / 9.0,
+            };
+            let width_m = HEIGHT_M * aspect;
+            let half_ang = (width_m / 2.0 / DISTANCE_M).atan();
+            let slot = self.ws.next_free_slot();
+            if slot.is_none() && !first {
+                // yaw + = left, so "to the right" is decreasing yaw.
+                next_yaw -= half_ang + GAP_RAD;
+            }
+            let id = Uuid::new_v4();
+            self.ws.upsert(SpatialWindow {
+                id,
+                source,
+                placement: perch_proto::Placement {
+                    yaw: next_yaw,
+                    pitch: gaze_pitch,
+                    distance: DISTANCE_M,
+                    roll: 0.0,
+                    width_m,
+                    height_m: HEIGHT_M,
+                },
+                anchor: Anchor::World,
+                z: self.ws.windows.len() as i32,
+                opacity: 1.0,
+                visible: true,
+                focused: false,
+            });
+            match slot {
+                Some((col, row)) => {
+                    let _ = self.ws.set_slot(id, col, row);
+                }
+                None => {
+                    next_yaw -= half_ang;
+                    first = false;
+                }
+            }
+            if let Some(w) = self.ws.get(id) {
+                fx.push(Effect::Broadcast(Event::WindowChanged(w.clone())));
+            }
+        }
+        if !fx.is_empty() {
+            self.on_focus_change();
+            fx.push(Effect::Broadcast(Event::FocusChanged { id: self.ws.focused }));
+            self.save();
+        }
+        fx
     }
 
     /// Per-frame placements (advances smooth-follow).
@@ -382,6 +520,48 @@ mod tests {
         assert!(
             matches!(&fx[1], Effect::DeliverInput { peer, events } if *peer == phone && events == &vec![InputEvent::Text { ch: 'x' }])
         );
+    }
+
+    #[test]
+    fn picked_windows_fan_out_right_of_gaze_and_do_not_duplicate() {
+        let mut e = Engine::new(me(), DisplayOptics::rokid_max_1080p(), None);
+        let mine = e.me.peer_id;
+        let src = |i: u32| Source::Window {
+            peer: mine,
+            handle: format!("portal:{i}"),
+            title: String::new(),
+        };
+        e.ws.apply_preset("coding", mine).unwrap();
+        assert_eq!(e.ws.windows.len(), 3, "preset placeholders");
+        let fx = e.add_picked_windows(vec![(src(0), Some((1920, 1080))), (src(1), Some((1080, 1920)))]);
+        assert_eq!(e.ws.windows.len(), 2, "placeholders replaced by picked windows");
+        assert_eq!(
+            fx.iter()
+                .filter(|f| matches!(f, Effect::Broadcast(Event::WindowRemoved { .. })))
+                .count(),
+            3
+        );
+        assert!(e.ws.windows.iter().all(|w| w.placement.pitch == 0.0), "eye level");
+        let (a, b) = (&e.ws.windows[0], &e.ws.windows[1]);
+        assert_eq!(
+            e.ws.slots[&a.id],
+            (0, 0),
+            "first picked window takes the first free grid slot"
+        );
+        assert_eq!(e.ws.slots[&b.id], (1, 0));
+        assert!(
+            b.placement.yaw < a.placement.yaw,
+            "second window to the right (yaw + = left)"
+        );
+        assert!((a.placement.width_m / a.placement.height_m - 16.0 / 9.0).abs() < 1e-3);
+        assert!((b.placement.width_m / b.placement.height_m - 9.0 / 16.0).abs() < 1e-3);
+        assert!(fx
+            .iter()
+            .any(|f| matches!(f, Effect::Broadcast(Event::FocusChanged { id: Some(_) }))));
+        // Restoring the same sources after a restart adds nothing.
+        let fx = e.add_picked_windows(vec![(src(0), None), (src(1), None)]);
+        assert!(fx.is_empty());
+        assert_eq!(e.ws.windows.len(), 2);
     }
 
     #[test]

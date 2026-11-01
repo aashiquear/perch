@@ -1,5 +1,6 @@
 //! Wires the control server, stream socket, device thread and engine together.
 
+use crate::capture::SharedBackend;
 use crate::config::Config;
 use crate::device::{DeviceCommand, DeviceEvent, DeviceHandle};
 use crate::engine::{Effect, Engine};
@@ -37,12 +38,42 @@ pub fn self_hello(cfg: &Config) -> Hello {
 /// Local input sink (uinput on Linux) — boxed so the server doesn't care.
 pub type LocalSink = Option<Box<dyn perch_input::InputSink>>;
 
+/// Result of a portal pick/restore, delivered back to the main loop.
+type PickOutcome = Result<Vec<(perch_proto::Source, Option<(u32, u32)>)>, String>;
+
+/// Run a pick (or restore) on the blocking pool and report back.
+fn spawn_pick(backend: SharedBackend, restore: Option<String>, multiple: bool, tx: mpsc::UnboundedSender<PickOutcome>) {
+    tokio::task::spawn_blocking(move || {
+        let res = (|| {
+            let mut guard = backend.lock().map_err(|_| "capture backend poisoned".to_string())?;
+            let b = guard.as_mut().ok_or_else(|| {
+                "screen capture is not available on this host (build perchd with --features linux-pipewire)".to_string()
+            })?;
+            let sources = match restore {
+                Some(tok) => b.restore(&tok),
+                None => b.pick(multiple),
+            }
+            .map_err(|e| e.to_string())?;
+            let sized = sources
+                .into_iter()
+                .map(|s| {
+                    let size = b.source_size(&s).filter(|(w, h)| *w > 0 && *h > 0);
+                    (s, size)
+                })
+                .collect();
+            Ok(sized)
+        })();
+        let _ = tx.send(res);
+    });
+}
+
 /// Run everything until shutdown.
 pub async fn run(
-    cfg: Config,
+    mut cfg: Config,
     engine: Arc<Mutex<Engine>>,
     mut dev: DeviceHandle,
     mut local_sink: LocalSink,
+    backend: SharedBackend,
 ) -> anyhow::Result<()> {
     let (server, mut inbound) = ControlServer::new(self_hello(&cfg));
     let server = if cfg.pairing_token.is_empty() {
@@ -138,6 +169,18 @@ pub async fn run(
     let button_actions = [cfg.buttons.button0.clone(), cfg.buttons.button1.clone()];
     let mut known_peers: HashMap<Uuid, Hello> = HashMap::new();
 
+    // Capture picks run on the blocking pool and report back here.
+    let (pick_tx, mut pick_rx) = mpsc::unbounded_channel::<PickOutcome>();
+    if !cfg.capture.restore_token.is_empty() {
+        tracing::info!("restoring last screen-capture selection");
+        spawn_pick(
+            Arc::clone(&backend),
+            Some(cfg.capture.restore_token.clone()),
+            true,
+            pick_tx.clone(),
+        );
+    }
+
     loop {
         tokio::select! {
             Some(Inbound { from, msg }) = inbound.recv() => {
@@ -154,24 +197,63 @@ pub async fn run(
                         _ => vec![],
                     }
                 };
-                apply_effects(fx, &server, &dev, &mut local_sink, &engine).await;
+                apply_effects(fx, &server, &dev, &mut local_sink, &engine, &backend, &pick_tx).await;
                 // Track joins/leaves by diffing the server's peer list.
                 let now: HashMap<Uuid, Hello> = server.peers().await.into_iter().map(|h| (h.peer_id, h)).collect();
                 for gone in known_peers.keys().filter(|k| !now.contains_key(k)).copied().collect::<Vec<_>>() {
                     let fx = engine.lock().await.peer_left(gone);
-                    apply_effects(fx, &server, &dev, &mut local_sink, &engine).await;
+                    apply_effects(fx, &server, &dev, &mut local_sink, &engine, &backend, &pick_tx).await;
                 }
                 for (id, h) in &now {
                     if !known_peers.contains_key(id) {
                         let fx = engine.lock().await.peer_joined(h.clone());
-                        apply_effects(fx, &server, &dev, &mut local_sink, &engine).await;
+                        apply_effects(fx, &server, &dev, &mut local_sink, &engine, &backend, &pick_tx).await;
                     }
                 }
                 known_peers = now;
             }
             Some(evs) = stream_in_rx.recv() => {
                 let fx = engine.lock().await.input(evs);
-                apply_effects(fx, &server, &dev, &mut local_sink, &engine).await;
+                apply_effects(fx, &server, &dev, &mut local_sink, &engine, &backend, &pick_tx).await;
+            }
+            Some(outcome) = pick_rx.recv() => {
+                let fx = match outcome {
+                    Ok(picked) => {
+                        let n = picked.len();
+                        let mut e = engine.lock().await;
+                        let mut fx = e.add_picked_windows(picked);
+                        if fx.is_empty() {
+                            fx.push(Effect::Broadcast(Event::Error {
+                                message: format!("{n} source(s) selected but no new windows were added"),
+                            }));
+                        }
+                        // Persist the restore token so the next start needs no dialog.
+                        let token = backend.lock().ok().and_then(|b| b.as_ref().and_then(|b| b.restore_token()));
+                        if let (Some(tok), Some(paths)) = (token, e.paths()) {
+                            if tok != cfg.capture.restore_token {
+                                cfg.capture.restore_token = tok;
+                                if let Err(err) = paths.save_config(&cfg) {
+                                    tracing::warn!("could not save restore token: {err}");
+                                }
+                            }
+                        }
+                        fx
+                    }
+                    Err(msg) => {
+                        tracing::warn!("capture pick failed: {msg}");
+                        if cfg.capture.restore_token.is_empty() {
+                            vec![Effect::Broadcast(Event::Error { message: format!("capture: {msg}") })]
+                        } else {
+                            // A stale restore token: forget it so the next start doesn't retry.
+                            cfg.capture.restore_token.clear();
+                            if let Some(paths) = engine.lock().await.paths() {
+                                let _ = paths.save_config(&cfg);
+                            }
+                            vec![]
+                        }
+                    }
+                };
+                apply_effects(fx, &server, &dev, &mut local_sink, &engine, &backend, &pick_tx).await;
             }
             Some(ev) = dev.events_rx.recv() => {
                 let fx = {
@@ -190,6 +272,11 @@ pub async fn run(
                             e.calibration = c;
                             vec![Effect::Broadcast(Event::Calibration(c))]
                         }
+                        DeviceEvent::CalibrationRejected { peak_deg_s } => vec![Effect::Broadcast(Event::Error {
+                            message: format!(
+                                "calibration rejected: glasses moved (peak {peak_deg_s:.1}°/s); keep them still and retry"
+                            ),
+                        })],
                         DeviceEvent::Button(b) => {
                             let action = button_actions.get(b as usize).cloned().unwrap_or_default();
                             e.button(&action)
@@ -197,7 +284,7 @@ pub async fn run(
                         DeviceEvent::Worn(_) => vec![],
                     }
                 };
-                apply_effects(fx, &server, &dev, &mut local_sink, &engine).await;
+                apply_effects(fx, &server, &dev, &mut local_sink, &engine, &backend, &pick_tx).await;
             }
             _ = tokio::signal::ctrl_c() => {
                 tracing::info!("shutting down");
@@ -214,6 +301,8 @@ async fn apply_effects(
     dev: &DeviceHandle,
     local_sink: &mut LocalSink,
     engine: &Arc<Mutex<Engine>>,
+    backend: &SharedBackend,
+    pick_tx: &mpsc::UnboundedSender<PickOutcome>,
 ) {
     for f in fx {
         match f {
@@ -229,6 +318,9 @@ async fn apply_effects(
             }
             Effect::SetBrightness(b) => {
                 let _ = dev.cmd_tx.send(DeviceCommand::SetBrightness(b));
+            }
+            Effect::PickSources { multiple } => {
+                spawn_pick(Arc::clone(backend), None, multiple, pick_tx.clone());
             }
             Effect::DeliverInput { peer, events } => {
                 let me = engine.lock().await.me.peer_id;

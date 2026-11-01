@@ -31,6 +31,28 @@ pub struct Config {
     pub input: InputConfig,
     /// Glasses buttons → actions.
     pub buttons: ButtonsConfig,
+    /// Screen capture.
+    pub capture: CaptureConfig,
+}
+
+/// Capture settings.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct CaptureConfig {
+    /// Opaque token from the last portal pick; lets perchd restore the same
+    /// windows on start without a dialog. Cleared by `perch pick`.
+    pub restore_token: String,
+    /// Requested capture frame rate.
+    pub fps: u32,
+}
+
+impl Default for CaptureConfig {
+    fn default() -> Self {
+        Self {
+            restore_token: String::new(),
+            fps: 60,
+        }
+    }
 }
 
 /// Display section.
@@ -90,6 +112,7 @@ impl Default for Config {
             tracker: TrackerConfig::default(),
             input: InputConfig::default(),
             buttons: ButtonsConfig::default(),
+            capture: CaptureConfig::default(),
         }
     }
 }
@@ -179,6 +202,13 @@ impl Paths {
             tracing::info!(path = %path.display(), "wrote default config");
             Ok(cfg)
         }
+    }
+
+    /// Overwrite the config file.
+    pub fn save_config(&self, cfg: &Config) -> anyhow::Result<()> {
+        std::fs::create_dir_all(&self.dir)?;
+        std::fs::write(self.config_file(), toml::to_string_pretty(cfg)?)?;
+        Ok(())
     }
 }
 

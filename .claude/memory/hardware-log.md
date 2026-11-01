@@ -20,3 +20,54 @@
 
 ## Dev machine
 - Ubuntu (26.04 target), Bosgame M5 (AMD Ryzen AI Max+ 395). Wayland/GNOME assumed → portal/PipeWire capture path.
+
+## 2026-10-31 — Ubuntu hw-check (Rokid Max, serial 1501082348005479, USB bcdDevice 2.00, firmware string not exposed over USB)
+- **USB**: 04d2:162f enumerates; `70-perch-rokid.rules` uaccess ACL works (no sudo). Kernel binds
+  hid-generic to the sensor interface; perch detaches/re-attaches it cleanly.
+- **IMU rate: 444 Hz, not 1 kHz.** dt median 2252 µs, min 2100, max 2406, zero gaps > 5 ms over 45 s.
+  (10 s run: 4449 samples; 45 s run: 19986.) `imu_rate_hz` for Max set to 444.
+- **Startup burst**: the first ~9 packets after claiming the interface are stale — device
+  timestamp ≈ 0.7 s (boot clock), gyro = ±40.04 rad/s on all axes, mag = 0 — then the clock jumps
+  to device uptime (15–80 s). `max_dt` skips the jump, but the 9 garbage samples integrate ~0.6 rad
+  before it. TODO (M1): drop packets until the timestamp jump / first 50 ms.
+- **Gyro, raw, on a desk**: bias x −0.07, **y +15.1**, z −0.95 °/min; 1σ noise ≈ 0.0015–0.0023 rad/s.
+  Bias stable to ±1 °/min over 5 s blocks across 45 s. Accel |a| = 9.883 m/s² (scale 0.9925). Mag live
+  (≈ −51, −9, −152 after warm-up; zero for the first ~10 ms).
+- **Desk vibration**: visibly still, yet raw |gyro| peaks 2–4 °/s (3.85 °/s max) for seconds at a time
+  (oscillatory, zero-mean, y+z). The old 2 °/s peak gate rejected calibration 3/3 times, silently.
+  Gate is now `tracker.calib_max_rate_deg_s` (default 5); rejections warn + broadcast `Event::Error`.
+- **Yaw drift**: uncalibrated **14.4 °/min** (matches y bias). After `perch calibrate --seconds 30`
+  (13 319 samples accepted): **0.08 °/min yaw, 0.01 °/min pitch over 60 s** (yaw range 0.15°).
+  Offline estimate from the raw recording agreed (≈ 0.2 °/min). M1 target (< 1 °/min) met.
+- **Pose stream**: `perch watch` control-channel poses arrive at ~28 Hz (33 ms throttle), as designed.
+- **Display**: GNOME sees "LBT Rokid Max" on DP-5. EDID exposes **1920×1200@120/60 and 1920×1080@120/60**
+  (61 modes) — answers the 1920×1200 question: yes, on Linux. `perch mode mono120` succeeds and the
+  device reads back Mono120, **but the compositor keeps 1920×1080@60**; the vendor mode switch does not
+  re-plug the monitor or change the host's selected mode. Set it host-side:
+  `gdctl set -L -M eDP-1 -s 1.5 -p -L -M DP-5 -m 1920x1080@120.000 -x 2048 -y 0` (temporary) → 120 Hz confirmed.
+- **Render window**: winit on Wayland names monitors by connector ("DP-5"), so the default
+  `display.monitor_name = "Rokid"` never matches and perchd draws in a normal window. Set
+  `monitor_name = "DP-5"` (perchd now logs the available names). TODO: match on EDID description.
+- **uinput**: `/dev/uinput` is `root:input 0660`; user is not in `input` → local injection unavailable.
+  Fix: `sudo usermod -aG input $USER` and re-login (or the 70-perch-uinput rule needs `TAG+="uaccess"`).
+- **CLI nit**: perch-net client `close()` still ends with "Connection reset without closing handshake" in perchd log.
+- Not yet measured: FOV, temple buttons, axis-sign check (needs glasses on a head).
+
+## 2026-11-01 — Linux M2 smoke test
+- perchd `--features full-linux` renders fullscreen on DP-5 (with `monitor_name = "DP-5"`), loads the
+  saved calibration (Ready at start), 3 test-pattern windows from `perch preset coding`.
+- Build deps without sudo: `apt-get download libpipewire-0.3-dev libspa-0.2-dev libclang-common-21-dev`,
+  `dpkg -x` into a scratch dir, sed `prefix=` in the .pc files, symlink `libpipewire-0.3.so.0`, then
+  `PKG_CONFIG_PATH=<dir>/usr/lib/x86_64-linux-gnu/pkgconfig LIBCLANG_PATH=/usr/lib/llvm-21/lib
+  BINDGEN_EXTRA_CLANG_ARGS="-isystem <dir>/usr/lib/llvm-21/lib/clang/21/include"`. Proper fix:
+  `sudo apt install libpipewire-0.3-dev libclang-dev`.
+- Not yet verified (needs a person at the screen for the portal dialog): `perch pick --multiple`
+  → real windows in the glasses; capture latency; 3 windows at 120 Hz.
+- 2026-11-01 Portal facts (GNOME 50): window streams negotiate BGRA at the window's buffer size
+  (e.g. 4096×2560 on a 1.5× scaled 3072×1920 panel); monitor streams BGRx 1920×1080 for DP-5.
+  Portal reports framerate 0/1 (variable). A restore with the saved token blocked >60 s in
+  `select_sources`/`start` with nobody at the screen — GNOME likely shows a confirmation dialog
+  even for ExplicitlyRevoked tokens; to verify.
+- 2026-11-01 Restore with the saved token re-attached 2 window streams in ~150 ms with no dialog
+  (the earlier >60 s hang was a stale token from a session the portal no longer had). Real windows
+  render; GNOME window streams are 4096×2560 BGRA. Unpaced render loop hit ~4800 fps → paced to 250.

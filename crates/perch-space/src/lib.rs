@@ -15,7 +15,7 @@
 #![warn(missing_docs)]
 
 use nalgebra::{Matrix3, Point2, Point3, UnitQuaternion, Vector3};
-use perch_proto::{Anchor, Layout, Placement, Pose, Source, SpatialWindow, WindowId};
+use perch_proto::{Anchor, Grid, Layout, Placement, Pose, Source, SpatialWindow, WindowId};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use uuid::Uuid;
@@ -32,6 +32,18 @@ pub enum SpaceError {
     /// Unknown preset.
     #[error("unknown preset: {0}")]
     UnknownPreset(String),
+    /// Slot outside the grid.
+    #[error("slot ({col}, {row}) is outside the {cols}×{rows} grid")]
+    BadSlot {
+        /// Column asked for.
+        col: u32,
+        /// Row asked for.
+        row: u32,
+        /// Grid columns.
+        cols: u32,
+        /// Grid rows.
+        rows: u32,
+    },
 }
 
 // ---------------------------------------------------------------------------
@@ -329,6 +341,44 @@ pub struct Workspace {
     /// Smooth-follow state, keyed by window id (not persisted).
     #[serde(skip)]
     pub followers: HashMap<WindowId, SmoothFollower>,
+    /// The slot grid windows snap to.
+    #[serde(default)]
+    pub grid: Grid,
+    /// Which slot each snapped window occupies. A window placed by hand
+    /// (`place`, `pin_here`) leaves its slot.
+    #[serde(default)]
+    pub slots: HashMap<WindowId, (u32, u32)>,
+}
+
+/// Placement of grid cell (`col`, `row`) for content with `aspect`
+/// (width/height). The window is fitted inside the cell keeping its aspect.
+pub fn grid_slot_placement(g: &Grid, col: u32, row: u32, aspect: f32) -> Placement {
+    let pitch_w = g.cell_w_m + g.gap_m;
+    let pitch_h = g.cell_h_m + g.gap_m;
+    // Flat offsets of the cell centre from the grid centre; +x right, +y up.
+    let x = (col as f32 - (g.cols.max(1) as f32 - 1.0) / 2.0) * pitch_w;
+    let y = ((g.rows.max(1) as f32 - 1.0) / 2.0 - row as f32) * pitch_h;
+    let d = g.distance.max(0.1);
+    let aspect = if aspect.is_finite() && aspect > 0.0 {
+        aspect
+    } else {
+        16.0 / 9.0
+    };
+    let mut width_m = g.cell_w_m.max(0.05);
+    let mut height_m = width_m / aspect;
+    if height_m > g.cell_h_m.max(0.05) {
+        height_m = g.cell_h_m.max(0.05);
+        width_m = height_m * aspect;
+    }
+    Placement {
+        // yaw + = left, so a cell to the right (+x) has negative yaw.
+        yaw: wrap_pi(g.center_yaw - (x / d).atan()),
+        pitch: g.center_pitch + (y / d).atan(),
+        distance: d,
+        roll: 0.0,
+        width_m,
+        height_m,
+    }
 }
 
 impl Workspace {
@@ -364,6 +414,7 @@ impl Workspace {
 
     /// Remove a window.
     pub fn remove(&mut self, id: WindowId) -> Result<(), SpaceError> {
+        self.slots.remove(&id);
         let before = self.windows.len();
         self.windows.retain(|w| w.id != id);
         if self.windows.len() == before {
@@ -379,6 +430,7 @@ impl Workspace {
 
     /// Move/resize.
     pub fn place(&mut self, id: WindowId, p: Placement) -> Result<(), SpaceError> {
+        self.slots.remove(&id);
         self.get_mut(id)?.placement = p;
         if let Some(f) = self.followers.get_mut(&id) {
             f.yaw = p.yaw;
@@ -390,12 +442,87 @@ impl Workspace {
     /// Pin the window at the current gaze direction (keeps size/distance).
     pub fn pin_here(&mut self, id: WindowId, pose: &Pose) -> Result<(), SpaceError> {
         let (yaw, pitch) = gaze_angles(pose);
+        self.slots.remove(&id);
         let w = self.get_mut(id)?;
         w.placement.yaw = yaw;
         w.placement.pitch = pitch;
         w.anchor = Anchor::World;
         self.followers.remove(&id);
         Ok(())
+    }
+
+    /// Replace the grid and re-place every slotted window.
+    pub fn set_grid(&mut self, grid: Grid) -> Vec<WindowId> {
+        self.grid = grid;
+        let ids: Vec<WindowId> = self.slots.keys().copied().collect();
+        let mut changed = Vec::new();
+        for id in ids {
+            let (col, row) = self.slots[&id];
+            if col < grid.cols && row < grid.rows {
+                if self.snap(id, col, row).is_ok() {
+                    changed.push(id);
+                }
+            } else {
+                self.slots.remove(&id);
+            }
+        }
+        changed
+    }
+
+    /// Snap window `id` into slot (`col`, `row`), keeping its aspect ratio.
+    pub fn set_slot(&mut self, id: WindowId, col: u32, row: u32) -> Result<(), SpaceError> {
+        if col >= self.grid.cols || row >= self.grid.rows {
+            return Err(SpaceError::BadSlot {
+                col,
+                row,
+                cols: self.grid.cols,
+                rows: self.grid.rows,
+            });
+        }
+        self.get(id).ok_or(SpaceError::NoSuchWindow)?;
+        // One window per slot: evict whoever was there.
+        self.slots.retain(|other, s| *other == id || *s != (col, row));
+        self.snap(id, col, row)
+    }
+
+    fn snap(&mut self, id: WindowId, col: u32, row: u32) -> Result<(), SpaceError> {
+        let grid = self.grid;
+        let w = self.get_mut(id)?;
+        let aspect = w.placement.width_m / w.placement.height_m.max(1e-3);
+        w.placement = grid_slot_placement(&grid, col, row, aspect);
+        w.anchor = Anchor::World;
+        self.followers.remove(&id);
+        self.slots.insert(id, (col, row));
+        Ok(())
+    }
+
+    /// First free slot in row-major order, if any.
+    pub fn next_free_slot(&self) -> Option<(u32, u32)> {
+        let taken: std::collections::HashSet<(u32, u32)> = self
+            .slots
+            .iter()
+            .filter(|(id, _)| self.get(**id).is_some())
+            .map(|(_, s)| *s)
+            .collect();
+        (0..self.grid.rows)
+            .flat_map(|row| (0..self.grid.cols).map(move |col| (col, row)))
+            .find(|s| !taken.contains(s))
+    }
+
+    /// Put every visible window into the grid, row-major, in z order. Windows
+    /// that don't fit are left where they are. Returns the ids that moved.
+    pub fn arrange_grid(&mut self) -> Vec<WindowId> {
+        self.slots.clear();
+        let mut ids: Vec<(i32, WindowId)> = self.windows.iter().filter(|w| w.visible).map(|w| (w.z, w.id)).collect();
+        ids.sort();
+        let mut moved = Vec::new();
+        for (_, id) in ids {
+            let Some((col, row)) = self.next_free_slot() else { break };
+            if self.snap(id, col, row).is_ok() {
+                moved.push(id);
+            }
+        }
+        moved
     }
 
     /// Change the anchor behaviour of a window.
@@ -735,6 +862,70 @@ mod tests {
             p = f.step(&base, 0.8, 0.0, 0.016);
         }
         assert!((p.yaw - 0.8).abs() < 0.01, "yaw = {}", p.yaw);
+    }
+
+    #[test]
+    fn grid_slots_map_left_right_up_down_and_keep_aspect() {
+        let g = Grid {
+            cols: 3,
+            rows: 2,
+            ..Default::default()
+        };
+        let left = grid_slot_placement(&g, 0, 0, 16.0 / 9.0);
+        let mid = grid_slot_placement(&g, 1, 0, 16.0 / 9.0);
+        let right = grid_slot_placement(&g, 2, 1, 16.0 / 9.0);
+        assert!(
+            left.yaw > 0.0 && right.yaw < 0.0,
+            "col 0 is left (+yaw), col 2 is right"
+        );
+        assert!(mid.yaw.abs() < 1e-6, "middle column is straight ahead");
+        assert!(
+            left.pitch > 0.0 && right.pitch < 0.0,
+            "row 0 is up (+pitch), row 1 is down"
+        );
+        assert!((left.width_m / left.height_m - 16.0 / 9.0).abs() < 1e-4);
+        assert!(left.width_m <= g.cell_w_m + 1e-6 && left.height_m <= g.cell_h_m + 1e-6);
+        let tall = grid_slot_placement(&g, 0, 0, 0.5);
+        assert!(
+            (tall.height_m - g.cell_h_m).abs() < 1e-6,
+            "tall content is height-limited"
+        );
+        // Symmetric: col 0 and col 2 mirror each other on the same row.
+        let r0 = grid_slot_placement(&g, 2, 0, 1.0);
+        assert!((left.yaw + r0.yaw).abs() < 1e-5);
+    }
+
+    #[test]
+    fn workspace_grid_arrange_slot_and_manual_place() {
+        let peer = Uuid::nil();
+        let mut ws = Workspace::new();
+        ws.apply_preset("coding", peer).unwrap();
+        let moved = ws.arrange_grid();
+        assert_eq!(moved.len(), 3);
+        assert_eq!(ws.next_free_slot(), None, "3-col grid full");
+        let ids: Vec<WindowId> = ws.windows.iter().map(|w| w.id).collect();
+        assert_eq!(ws.slots[&ids[0]], (0, 0));
+        assert!(ws.windows[0].placement.yaw > ws.windows[2].placement.yaw);
+        // Move window 0 to the right slot: it evicts window 2 from that slot.
+        ws.set_slot(ids[0], 2, 0).unwrap();
+        assert_eq!(ws.slots[&ids[0]], (2, 0));
+        assert!(!ws.slots.contains_key(&ids[2]));
+        assert!(matches!(ws.set_slot(ids[0], 5, 0), Err(SpaceError::BadSlot { .. })));
+        // Manual placement leaves the grid.
+        ws.place(ids[0], place(0.1, 0.1, 2.0, 1.0, 0.5)).unwrap();
+        assert!(!ws.slots.contains_key(&ids[0]));
+        // Changing the grid re-places slotted windows and drops out-of-range ones.
+        ws.set_slot(ids[1], 1, 0).unwrap();
+        let changed = ws.set_grid(Grid {
+            cols: 1,
+            rows: 1,
+            ..Default::default()
+        });
+        assert!(changed.is_empty());
+        assert!(ws.slots.is_empty(), "slot (1,0) no longer exists");
+        // Persisted.
+        let back = Workspace::from_json(&ws.to_json()).unwrap();
+        assert_eq!(back.grid.cols, 1);
     }
 
     #[test]

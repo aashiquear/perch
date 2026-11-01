@@ -7,6 +7,7 @@
 //! perchd --config-dir ./dev   # keep state out of ~/.config while hacking
 //! ```
 
+mod capture;
 mod config;
 mod device;
 mod engine;
@@ -34,7 +35,10 @@ struct Args {
     #[arg(long)]
     headless: bool,
     /// Log filter (RUST_LOG syntax).
-    #[arg(long, default_value = "info")]
+    #[arg(
+        long,
+        default_value = "info,zbus=error,wgpu_hal=warn,wgpu_core=warn,sctk_adwaita=error,naga=warn"
+    )]
     log: String,
 }
 
@@ -81,6 +85,7 @@ fn main() -> anyhow::Result<()> {
         Some(paths.clone()),
     )));
     let dev = device::spawn(cfg.clone(), Some(paths.clone()), source);
+    let backend = capture::init(cfg.peer_id);
 
     let local_sink: server::LocalSink = {
         #[cfg(all(target_os = "linux", feature = "linux-input"))]
@@ -107,14 +112,26 @@ fn main() -> anyhow::Result<()> {
         let eng2 = Arc::clone(&engine);
         let tracker = Arc::clone(&dev.tracker);
         let cfg2 = cfg.clone();
+        let backend2 = Arc::clone(&backend);
         std::thread::spawn(move || {
-            if let Err(e) = rt.block_on(server::run(cfg2, eng2, dev, local_sink)) {
+            if let Err(e) = rt.block_on(server::run(cfg2, eng2, dev, local_sink, backend2)) {
                 tracing::error!("server: {e}");
             }
             std::process::exit(0);
         });
-        return render::RenderApp::new(engine, tracker, cfg.display.monitor_name.clone(), cfg.display.ipd_m).run();
+        return render::RenderApp::new(
+            engine,
+            tracker,
+            cfg.display.monitor_name.clone(),
+            cfg.display.ipd_m,
+            render::CaptureSetup {
+                backend,
+                me: cfg.peer_id,
+                fps: cfg.capture.fps,
+            },
+        )
+        .run();
     }
 
-    rt.block_on(server::run(cfg, engine, dev, local_sink))
+    rt.block_on(server::run(cfg, engine, dev, local_sink, backend))
 }

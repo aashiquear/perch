@@ -15,10 +15,12 @@ default = []
 # Real Rokid hardware.
 rokid = ["perch-hal/rokid"]
 # Open a window on the glasses and draw (needs a GPU + display server).
-render = ["dep:perch-compositor", "dep:perch-capture", "dep:winit"]
+render = ["dep:perch-compositor", "dep:winit"]
+# Linux screen/window capture via xdg-desktop-portal + PipeWire (needs libpipewire-0.3-dev).
+linux-pipewire = ["perch-capture/linux-pipewire"]
 # Linux keyboard/mouse injection + capture.
 linux-input = ["perch-input/linux-evdev"]
-full-linux = ["rokid", "render", "linux-input"]
+full-linux = ["rokid", "render", "linux-input", "linux-pipewire"]
 
 [dependencies]
 perch-proto.workspace = true
@@ -28,7 +30,7 @@ perch-hal.workspace = true
 perch-net.workspace = true
 perch-input.workspace = true
 perch-compositor = { workspace = true, optional = true }
-perch-capture = { workspace = true, optional = true }
+perch-capture.workspace = true
 winit = { workspace = true, optional = true }
 tokio.workspace = true
 serde.workspace = true

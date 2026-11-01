@@ -147,7 +147,9 @@ pub mod rokid {
                 display_tilt: 0.07,
                 display_delay_us: inner.display_delay(),
                 has_mag: true,
-                imu_rate_hz: if model.contains("Max") { 1000 } else { 500 },
+                // Measured 2026-10-31 on Linux: the Max delivers 444 Hz (dt ≈ 2.25 ms),
+                // not the 1 kHz quoted in ar-drivers docs. See .claude/memory/hardware-log.md.
+                imu_rate_hz: if model.contains("Max") { 444 } else { 500 },
                 model,
                 serial,
             };
@@ -207,12 +209,29 @@ pub mod rokid {
                         gyroscope,
                         timestamp,
                     } => {
+                        // Measured 2026-10-31: the first ~9 packets after
+                        // claiming the interface are stale (boot-clock
+                        // timestamps, gyro = ±40.04 rad/s on every axis).
+                        // No MEMS gyro here reads above ~35 rad/s, so drop
+                        // physically impossible samples instead of integrating
+                        // ~0.6 rad of garbage into the first pose.
+                        let g = v3(&gyroscope);
+                        if g.iter().any(|v| v.abs() > MAX_PLAUSIBLE_RATE) {
+                            let n = DROPPED.with(|d| {
+                                d.set(d.get() + 1);
+                                d.get()
+                            });
+                            if n <= 20 {
+                                tracing::debug!(n, ?g, "dropping implausible IMU sample");
+                            }
+                            continue;
+                        }
                         return Ok(HalEvent::Imu(ImuSample {
                             t_us: timestamp,
                             accel: v3(&accelerometer),
                             gyro: v3(&gyroscope),
                             mag: LAST_MAG.with(|m| m.get()),
-                        }))
+                        }));
                     }
                     GlassesEvent::Magnetometer { magnetometer, .. } => {
                         LAST_MAG.with(|m| m.set(Some(v3(&magnetometer))));
@@ -235,7 +254,11 @@ pub mod rokid {
         }
     }
 
+    /// Gyro readings above this (rad/s, ≈ 2000 °/s) are sensor garbage.
+    const MAX_PLAUSIBLE_RATE: f32 = 35.0;
+
     thread_local! {
+        static DROPPED: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
         static LAST_MAG: std::cell::Cell<Option<Vector3<f32>>> = const { std::cell::Cell::new(None) };
     }
 }

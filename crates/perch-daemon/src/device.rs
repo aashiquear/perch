@@ -29,6 +29,11 @@ pub enum DeviceEvent {
     Disconnected,
     /// Calibration state changed.
     Calibration(CalibrationState),
+    /// A stationary calibration run was rejected (glasses moved).
+    CalibrationRejected {
+        /// Peak angular rate seen during the run, deg/s.
+        peak_deg_s: f32,
+    },
     /// Temple button.
     Button(u8),
     /// Worn / taken off (reserved: auto-dim / pause when taken off).
@@ -162,11 +167,16 @@ fn device_loop(
         }
 
         // --- stream ----------------------------------------------------
+        let mut cal_samples_before = 0u32;
         loop {
             while let Ok(c) = cmd_rx.try_recv() {
                 match c {
                     DeviceCommand::Recenter => tracker.lock().unwrap().recenter(),
-                    DeviceCommand::Calibrate(s) => tracker.lock().unwrap().start_calibration(s as f32),
+                    DeviceCommand::Calibrate(s) => {
+                        let mut t = tracker.lock().unwrap();
+                        cal_samples_before = t.calibration().samples;
+                        t.start_calibration(s as f32);
+                    }
                     DeviceCommand::SetDisplayMode(m) => {
                         if let Err(e) = dev.set_display_mode(m) {
                             tracing::warn!("display mode: {e}");
@@ -188,6 +198,20 @@ fn device_loop(
                     };
                     let _ = pose_tx.send(pose);
                     if state != last_state {
+                        if matches!(last_state, CalibrationState::Calibrating { .. })
+                            && !matches!(state, CalibrationState::Calibrating { .. })
+                        {
+                            let t = tracker.lock().unwrap();
+                            if t.calibration().samples == cal_samples_before {
+                                let peak_deg_s = t.last_calibration_peak_rate().to_degrees();
+                                tracing::warn!(
+                                    peak_deg_s,
+                                    limit_deg_s = cfg.tracker.calib_max_rate_deg_s,
+                                    "calibration rejected: glasses moved"
+                                );
+                                let _ = events_tx.send(DeviceEvent::CalibrationRejected { peak_deg_s });
+                            }
+                        }
                         if state == CalibrationState::Ready && !matches!(last_state, CalibrationState::Uncalibrated) {
                             // Calibration just finished: persist.
                             if let Some(p) = &paths {

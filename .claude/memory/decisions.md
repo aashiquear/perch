@@ -31,3 +31,13 @@
   IMU interface (no libusb, no MFi). Host mode is Linux/Windows/macOS/Android.
 - 2026-10-31 **Pairing token v0.1 = `name#token` suffix in Hello.** Explicitly
   LAN-only; TLS/Noise is roadmap M5. Do not expose 7420/7421 to the internet.
+- 2026-10-31 **Calibration reject gate is a config knob, default 5 °/s peak.** A real
+  desk gives 2–4 °/s zero-mean vibration peaks at 444 Hz; the bias estimate is a
+  mean so vibration doesn't hurt it. A nudge is tens of °/s and still rejects. A
+  rejected run must be visible to the user (`Event::Error`), never silent.
+- 2026-11-01 **Linux capture = portal + PipeWire, CPU frames first.** Sources from a pick get
+  handles `portal:<n>` (index within the backend, stable across a restore because the portal
+  returns streams in the same order); the restore token lives in `[capture] restore_token`.
+  One PipeWire main loop per stream, latest frame wins. DMA-BUF import is a later optimisation,
+  not a prerequisite — 1–3 windows at 1080p copy fine. The engine places picked windows
+  (`add_picked_windows`) and is idempotent so restore after restart adds nothing new.

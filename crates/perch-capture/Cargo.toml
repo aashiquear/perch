@@ -8,7 +8,7 @@ description = "Screen/window capture sources that feed the compositor: PipeWire 
 [features]
 default = []
 # Linux: xdg-desktop-portal ScreenCast → PipeWire. Needs libpipewire-0.3-dev.
-linux-pipewire = ["dep:ashpd", "dep:pipewire"]
+linux-pipewire = ["dep:ashpd", "dep:pipewire", "dep:tokio"]
 windows-wgc = []
 macos-sck = []
 
@@ -22,3 +22,4 @@ uuid.workspace = true
 [target.'cfg(target_os = "linux")'.dependencies]
 ashpd = { version = "0.10", optional = true }
 pipewire = { version = "0.8", optional = true }
+tokio = { workspace = true, optional = true }

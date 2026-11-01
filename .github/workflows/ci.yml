@@ -18,7 +18,7 @@ jobs:
         run: cargo test
       - name: check full-linux daemon (rokid + render + input)
         run: |
-          sudo apt-get update && sudo apt-get install -y libudev-dev
+          sudo apt-get update && sudo apt-get install -y libudev-dev libpipewire-0.3-dev libclang-dev
           cargo check -p perch-daemon --features full-linux
       - name: check ffi with rokid
         run: cargo check -p perch-ffi --features rokid

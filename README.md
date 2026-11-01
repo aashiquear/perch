@@ -30,7 +30,7 @@ glasses, with several windows pinned around you instead of one bobbing mirror.
 | wgpu compositor, mono + SBS stereo (`perch-compositor`) | **done; renders test pattern** |
 | Keyboard/mouse routing + edge switching (`perch-input`) | **done, tested; Linux uinput/evdev backend compiles** |
 | Daemon `perchd` + CLI `perch` | **done, run with `--mock synthetic` today** |
-| Screen capture (PipeWire / WGC / SCK) | scaffold → [M2](docs/ROADMAP.md) |
+| Screen capture | Linux PipeWire portal ✅ (`perch pick`); WGC / SCK scaffold → [M2](docs/ROADMAP.md) |
 | Android host app (USB IMU, GL presentation, mirror window) + touchpad | **written, not yet built on a device** |
 | iPad touchpad app (SwiftUI) | **written, not yet built** |
 | Windows / macOS daemons | shared Rust core; backends → M4 |

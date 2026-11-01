@@ -1,0 +1,722 @@
+//! Linux capture: xdg-desktop-portal ScreenCast → PipeWire (feature
+//! `linux-pipewire`). Works on GNOME, KDE, wlroots and X11 via the portal.
+//!
+//! Flow:
+//!
+//! 1. [`PortalBackend::pick`] runs the portal dialog on a dedicated thread
+//!    (`Screencast::create_session` → `select_sources` → `start` →
+//!    `open_pipe_wire_remote`). The user picks one or more windows/monitors.
+//! 2. Each picked stream becomes a [`Source`] whose handle is `portal:<n>`
+//!    (`n` = index within this backend). The portal gives no window titles.
+//! 3. Each portal session gets exactly one PipeWire connection ([`PwSession`],
+//!    its own thread + main loop) — the portal hands out one socket per
+//!    session and two cores on a dup of the same socket corrupt each other.
+//!    [`PortalBackend::open`] adds a stream to that loop; it negotiates a
+//!    CPU-visible BGRx/BGRA/RGBx/RGBA format and publishes the latest frame
+//!    (older frames are dropped) as [`Frame::Rgba`].
+//! 4. The restore token from the last pick is exposed via
+//!    [`PortalBackend::restore_token`]; passing it to [`PortalBackend::restore`]
+//!    on the next start re-creates the same streams with no dialog.
+//!
+//! Zero-copy DMA-BUF import is a later step (ROADMAP M2); 1–3 windows at
+//! 1080p/60 through CPU memory cost ~0.5 GB/s per window, which is fine.
+//!
+//! Virtual monitors (GNOME `RecordVirtual`, `wlr-virtual-output`) are not
+//! implemented yet.
+
+use super::{now_us, CaptureBackend, CaptureError, CaptureSource, Frame, PixelFormat};
+use ashpd::desktop::screencast::{CursorMode, Screencast, SourceType};
+use ashpd::desktop::PersistMode;
+use ashpd::desktop::Session;
+use perch_proto::Source;
+use std::io::Cursor;
+use std::os::fd::OwnedFd;
+use std::sync::{mpsc, Arc, Condvar, Mutex};
+use std::time::Duration;
+use uuid::Uuid;
+
+/// One stream the portal handed us.
+#[derive(Debug, Clone)]
+pub struct PickedStream {
+    /// Index within this backend (`portal:<index>` handle).
+    pub index: u32,
+    /// PipeWire node id to connect to.
+    pub node_id: u32,
+    /// Size reported by the portal, if any.
+    pub size: Option<(u32, u32)>,
+    /// Monitor or window.
+    pub kind: Option<SourceType>,
+    /// Portal's opaque per-source id, if it gives one; picking the same
+    /// window twice then maps to the same [`Source`] instead of a duplicate.
+    pub portal_id: Option<String>,
+    /// The PipeWire connection of the portal session that owns this node.
+    session: Arc<PwSession>,
+}
+
+enum PortalReq {
+    Pick {
+        multiple: bool,
+        restore_token: Option<String>,
+        reply: mpsc::Sender<Result<PickResult, CaptureError>>,
+    },
+}
+
+/// (PipeWire node id, size, monitor/window, portal id) for one picked stream.
+type RawStream = (u32, Option<(u32, u32)>, Option<SourceType>, Option<String>);
+
+struct PickResult {
+    streams: Vec<RawStream>,
+    restore_token: Option<String>,
+    fd: OwnedFd,
+}
+
+/// Keeps a portal session alive for as long as its streams are used.
+struct LiveSession {
+    _proxy: Screencast<'static>,
+    _session: Session<'static, Screencast<'static>>,
+}
+
+/// Portal-backed capture.
+pub struct PortalBackend {
+    peer: Uuid,
+    req_tx: mpsc::Sender<PortalReq>,
+    streams: Vec<PickedStream>,
+    restore_token: Option<String>,
+}
+
+impl PortalBackend {
+    /// Connect to the portal. `peer` is our own peer id, used in the
+    /// [`Source`]s this backend produces.
+    pub fn new(peer: Uuid) -> Result<Self, CaptureError> {
+        let (req_tx, req_rx) = mpsc::channel::<PortalReq>();
+        std::thread::Builder::new()
+            .name("perch-portal".into())
+            .spawn(move || portal_thread(req_rx))
+            .map_err(|e| CaptureError::Other(format!("spawn portal thread: {e}")))?;
+        Ok(Self {
+            peer,
+            req_tx,
+            streams: Vec::new(),
+            restore_token: None,
+        })
+    }
+
+    fn request(&mut self, multiple: bool, restore_token: Option<String>) -> Result<Vec<Source>, CaptureError> {
+        let (reply, rx) = mpsc::channel();
+        self.req_tx
+            .send(PortalReq::Pick {
+                multiple,
+                restore_token,
+                reply,
+            })
+            .map_err(|_| CaptureError::Other("portal thread gone".into()))?;
+        // The user may take a while in the dialog.
+        let res = rx
+            .recv_timeout(Duration::from_secs(300))
+            .map_err(|_| CaptureError::Other("portal timed out".into()))??;
+        let session = Arc::new(PwSession::start(res.fd)?);
+        let mut added = Vec::new();
+        for (node_id, size, kind, portal_id) in res.streams {
+            if let Some(existing) = portal_id
+                .as_deref()
+                .and_then(|pid| self.streams.iter().find(|s| s.portal_id.as_deref() == Some(pid)))
+            {
+                // Same window picked again: hand back the existing source
+                // (the engine ignores sources it already shows).
+                tracing::info!(index = existing.index, "source already picked; not duplicating");
+                added.push(self.source_for(existing.index));
+                continue;
+            }
+            let index = self.streams.len() as u32;
+            self.streams.push(PickedStream {
+                index,
+                node_id,
+                size,
+                kind,
+                portal_id,
+                session: Arc::clone(&session),
+            });
+            added.push(self.source_for(index));
+        }
+        if res.restore_token.is_some() {
+            self.restore_token = res.restore_token;
+        }
+        tracing::info!(streams = added.len(), "portal capture started");
+        Ok(added)
+    }
+
+    fn source_for(&self, index: u32) -> Source {
+        let s = &self.streams[index as usize];
+        match s.kind {
+            Some(SourceType::Monitor) => Source::Display {
+                peer: self.peer,
+                display_index: index,
+            },
+            _ => Source::Window {
+                peer: self.peer,
+                handle: format!("portal:{index}"),
+                title: match s.size {
+                    Some((w, h)) => format!("Shared window {index} ({w}×{h})"),
+                    None => format!("Shared window {index}"),
+                },
+            },
+        }
+    }
+
+    /// Resolve a [`Source`] produced by this backend back to its stream.
+    fn stream_for(&self, source: &Source) -> Option<&PickedStream> {
+        let index = match source {
+            Source::Display { peer, display_index } if *peer == self.peer => *display_index,
+            Source::Window { peer, handle, .. } if *peer == self.peer => {
+                handle.strip_prefix("portal:")?.parse().ok()?
+            }
+            _ => return None,
+        };
+        self.streams.get(index as usize)
+    }
+}
+
+impl CaptureBackend for PortalBackend {
+    fn enumerate(&mut self) -> Result<Vec<Source>, CaptureError> {
+        Ok((0..self.streams.len() as u32).map(|i| self.source_for(i)).collect())
+    }
+
+    fn pick(&mut self, multiple: bool) -> Result<Vec<Source>, CaptureError> {
+        self.request(multiple, None)
+    }
+
+    fn restore(&mut self, token: &str) -> Result<Vec<Source>, CaptureError> {
+        self.request(true, Some(token.to_string()))
+    }
+
+    fn restore_token(&self) -> Option<String> {
+        self.restore_token.clone()
+    }
+
+    fn source_size(&self, source: &Source) -> Option<(u32, u32)> {
+        self.stream_for(source).and_then(|s| s.size)
+    }
+
+    fn open(&mut self, source: &Source, fps: u32) -> Result<Box<dyn CaptureSource>, CaptureError> {
+        let stream = self
+            .stream_for(source)
+            .ok_or_else(|| CaptureError::Other(format!("{source:?} is not a picked portal stream")))?
+            .clone();
+        PipeWireSource::start(source.clone(), stream, fps).map(|s| Box::new(s) as Box<dyn CaptureSource>)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Portal thread
+// ---------------------------------------------------------------------------
+
+fn portal_thread(rx: mpsc::Receiver<PortalReq>) {
+    let rt = match tokio::runtime::Builder::new_current_thread().enable_all().build() {
+        Ok(rt) => rt,
+        Err(e) => {
+            tracing::error!("portal runtime: {e}");
+            return;
+        }
+    };
+    let mut live: Vec<LiveSession> = Vec::new();
+    while let Ok(req) = rx.recv() {
+        match req {
+            PortalReq::Pick {
+                multiple,
+                restore_token,
+                reply,
+            } => {
+                let res = rt.block_on(pick(multiple, restore_token.as_deref()));
+                let _ = reply.send(res.map(|(r, session)| {
+                    live.push(session);
+                    r
+                }));
+            }
+        }
+    }
+}
+
+fn portal_err(e: ashpd::Error) -> CaptureError {
+    match e {
+        ashpd::Error::Response(ashpd::desktop::ResponseError::Cancelled) => CaptureError::Denied,
+        other => CaptureError::Other(format!("portal: {other}")),
+    }
+}
+
+async fn pick(multiple: bool, restore_token: Option<&str>) -> Result<(PickResult, LiveSession), CaptureError> {
+    let proxy = Screencast::new().await.map_err(portal_err)?;
+    let session = proxy.create_session().await.map_err(portal_err)?;
+    proxy
+        .select_sources(
+            &session,
+            CursorMode::Embedded,
+            SourceType::Monitor | SourceType::Window,
+            multiple,
+            restore_token,
+            PersistMode::ExplicitlyRevoked,
+        )
+        .await
+        .map_err(portal_err)?
+        .response()
+        .map_err(portal_err)?;
+    let streams = proxy
+        .start(&session, None)
+        .await
+        .map_err(portal_err)?
+        .response()
+        .map_err(portal_err)?;
+    let fd = proxy.open_pipe_wire_remote(&session).await.map_err(portal_err)?;
+    let picked = streams
+        .streams()
+        .iter()
+        .map(|s| {
+            (
+                s.pipe_wire_node_id(),
+                s.size().map(|(w, h)| (w.max(1) as u32, h.max(1) as u32)),
+                s.source_type(),
+                s.id().map(ToOwned::to_owned),
+            )
+        })
+        .collect();
+    Ok((
+        PickResult {
+            streams: picked,
+            restore_token: streams.restore_token().map(ToOwned::to_owned),
+            fd,
+        },
+        LiveSession {
+            _proxy: proxy,
+            _session: session,
+        },
+    ))
+}
+
+// ---------------------------------------------------------------------------
+// One PipeWire connection per portal session
+// ---------------------------------------------------------------------------
+
+#[derive(Default)]
+struct Shared {
+    latest: Option<Frame>,
+    seq: u64,
+    size: (u32, u32),
+    ended: bool,
+}
+
+struct Slot {
+    m: Mutex<Shared>,
+    cv: Condvar,
+}
+
+impl Slot {
+    fn end(&self) {
+        let mut s = self.m.lock().unwrap();
+        s.ended = true;
+        self.cv.notify_all();
+    }
+}
+
+enum PwCmd {
+    Connect {
+        node_id: u32,
+        fps: u32,
+        slot: Arc<Slot>,
+        reply: mpsc::Sender<Result<u64, String>>,
+    },
+    Disconnect(u64),
+    Quit,
+}
+
+/// A PipeWire main-loop thread connected to one portal session's socket.
+/// Streams are created and destroyed on that thread via [`PwCmd`].
+pub struct PwSession {
+    /// For `Debug` on [`PickedStream`].
+    id: u64,
+    cmd: pipewire::channel::Sender<PwCmd>,
+    thread: Mutex<Option<std::thread::JoinHandle<()>>>,
+}
+
+impl PwSession {
+    fn start(fd: OwnedFd) -> Result<Self, CaptureError> {
+        let (cmd_tx, cmd_rx) = pipewire::channel::channel::<PwCmd>();
+        let (ready_tx, ready_rx) = mpsc::channel::<Result<(), String>>();
+        let thread = std::thread::Builder::new()
+            .name("perch-pipewire".into())
+            .spawn(move || {
+                if let Err(e) = pw_session_loop(fd, cmd_rx, ready_tx) {
+                    tracing::warn!("pipewire session: {e}");
+                }
+            })
+            .map_err(|e| CaptureError::Other(format!("spawn pipewire thread: {e}")))?;
+        ready_rx
+            .recv_timeout(Duration::from_secs(10))
+            .map_err(|_| CaptureError::Other("pipewire connection did not come up".into()))?
+            .map_err(CaptureError::Other)?;
+        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+        Ok(Self {
+            id: NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
+            cmd: cmd_tx,
+            thread: Mutex::new(Some(thread)),
+        })
+    }
+
+    fn connect(&self, node_id: u32, fps: u32, slot: Arc<Slot>) -> Result<u64, CaptureError> {
+        let (reply, rx) = mpsc::channel();
+        self.cmd
+            .send(PwCmd::Connect {
+                node_id,
+                fps,
+                slot,
+                reply,
+            })
+            .map_err(|_| CaptureError::Ended)?;
+        rx.recv_timeout(Duration::from_secs(10))
+            .map_err(|_| CaptureError::Other("pipewire stream did not start".into()))?
+            .map_err(CaptureError::Other)
+    }
+}
+
+impl std::fmt::Debug for PwSession {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "PwSession#{}", self.id)
+    }
+}
+
+impl Drop for PwSession {
+    fn drop(&mut self) {
+        let _ = self.cmd.send(PwCmd::Quit);
+        if let Some(t) = self.thread.lock().unwrap().take() {
+            let _ = t.join();
+        }
+    }
+}
+
+/// A running capture of one portal stream.
+pub struct PipeWireSource {
+    source: Source,
+    slot: Arc<Slot>,
+    seen: u64,
+    key: u64,
+    session: Arc<PwSession>,
+}
+
+impl PipeWireSource {
+    fn start(source: Source, stream: PickedStream, fps: u32) -> Result<Self, CaptureError> {
+        let slot = Arc::new(Slot {
+            m: Mutex::new(Shared {
+                size: stream.size.unwrap_or((1920, 1080)),
+                ..Default::default()
+            }),
+            cv: Condvar::new(),
+        });
+        let key = stream.session.connect(stream.node_id, fps, Arc::clone(&slot))?;
+        Ok(Self {
+            source,
+            slot,
+            seen: 0,
+            key,
+            session: stream.session,
+        })
+    }
+}
+
+impl Drop for PipeWireSource {
+    fn drop(&mut self) {
+        let _ = self.session.cmd.send(PwCmd::Disconnect(self.key));
+    }
+}
+
+impl CaptureSource for PipeWireSource {
+    fn source(&self) -> &Source {
+        &self.source
+    }
+
+    fn next_frame(&mut self, timeout: Duration) -> Result<Option<Frame>, CaptureError> {
+        let mut s = self.slot.m.lock().unwrap();
+        if s.seq == self.seen && !s.ended && !timeout.is_zero() {
+            let (guard, _) = self.slot.cv.wait_timeout(s, timeout).unwrap();
+            s = guard;
+        }
+        if s.ended {
+            return Err(CaptureError::Ended);
+        }
+        if s.seq != self.seen {
+            self.seen = s.seq;
+            return Ok(s.latest.clone());
+        }
+        Ok(None)
+    }
+
+    fn size(&self) -> (u32, u32) {
+        self.slot.m.lock().unwrap().size
+    }
+}
+
+struct UserData {
+    format: pipewire::spa::param::video::VideoInfoRaw,
+    slot: Arc<Slot>,
+    frames: u64,
+    node_id: u32,
+}
+
+type LiveStream = (pipewire::stream::Stream, pipewire::stream::StreamListener<UserData>);
+
+fn pw_session_loop(
+    fd: OwnedFd,
+    cmd_rx: pipewire::channel::Receiver<PwCmd>,
+    ready: mpsc::Sender<Result<(), String>>,
+) -> Result<(), String> {
+    use pipewire as pw;
+    use std::cell::RefCell;
+    use std::collections::HashMap;
+    use std::rc::Rc;
+
+    pw::init();
+    let mainloop = pw::main_loop::MainLoop::new(None).map_err(|e| e.to_string())?;
+    let context = pw::context::Context::new(&mainloop).map_err(|e| e.to_string())?;
+    let core = match context.connect_fd(fd, None) {
+        Ok(c) => c,
+        Err(e) => {
+            let _ = ready.send(Err(format!("pipewire connect: {e}")));
+            return Err(e.to_string());
+        }
+    };
+    let streams: Rc<RefCell<HashMap<u64, LiveStream>>> = Rc::new(RefCell::new(HashMap::new()));
+    let next_key = std::cell::Cell::new(1u64);
+    let weak = mainloop.downgrade();
+    let streams2 = Rc::clone(&streams);
+    let _attached = cmd_rx.attach(mainloop.loop_(), move |cmd| match cmd {
+        PwCmd::Connect {
+            node_id,
+            fps,
+            slot,
+            reply,
+        } => {
+            let res = connect_stream(&core, node_id, fps, slot).map(|live| {
+                let key = next_key.get();
+                next_key.set(key + 1);
+                streams2.borrow_mut().insert(key, live);
+                key
+            });
+            let _ = reply.send(res);
+        }
+        PwCmd::Disconnect(key) => {
+            if let Some((stream, _listener)) = streams2.borrow_mut().remove(&key) {
+                let _ = stream.disconnect();
+            }
+        }
+        PwCmd::Quit => {
+            if let Some(l) = weak.upgrade() {
+                l.quit();
+            }
+        }
+    });
+    let _ = ready.send(Ok(()));
+    mainloop.run();
+    for (_, (stream, _)) in streams.borrow_mut().drain() {
+        let _ = stream.disconnect();
+    }
+    Ok(())
+}
+
+fn connect_stream(core: &pipewire::core::Core, node_id: u32, fps: u32, slot: Arc<Slot>) -> Result<LiveStream, String> {
+    use pipewire as pw;
+    use pw::spa;
+    use spa::pod::{Pod, Value};
+
+    let stream = pw::stream::Stream::new(
+        core,
+        "perch-capture",
+        pw::properties::properties! {
+            *pw::keys::MEDIA_TYPE => "Video",
+            *pw::keys::MEDIA_CATEGORY => "Capture",
+            *pw::keys::MEDIA_ROLE => "Screen",
+        },
+    )
+    .map_err(|e| e.to_string())?;
+
+    let data = UserData {
+        format: Default::default(),
+        slot,
+        frames: 0,
+        node_id,
+    };
+    let listener = stream
+        .add_local_listener_with_user_data(data)
+        .state_changed(|_, ud, old, new| {
+            tracing::debug!(node_id = ud.node_id, ?old, ?new, "pipewire stream state");
+            if matches!(
+                new,
+                pw::stream::StreamState::Error(_) | pw::stream::StreamState::Unconnected
+            ) && !matches!(old, pw::stream::StreamState::Unconnected)
+            {
+                ud.slot.end();
+            }
+        })
+        .param_changed(|_, ud, id, param| {
+            let Some(param) = param else { return };
+            if id != spa::param::ParamType::Format.as_raw() {
+                return;
+            }
+            let Ok((mt, mst)) = spa::param::format_utils::parse_format(param) else {
+                return;
+            };
+            if mt != spa::param::format::MediaType::Video || mst != spa::param::format::MediaSubtype::Raw {
+                return;
+            }
+            if ud.format.parse(param).is_err() {
+                tracing::warn!("could not parse negotiated video format");
+                return;
+            }
+            let size = ud.format.size();
+            tracing::info!(
+                node_id = ud.node_id,
+                format = ?ud.format.format(),
+                width = size.width,
+                height = size.height,
+                "capture format negotiated"
+            );
+            let mut s = ud.slot.m.lock().unwrap();
+            s.size = (size.width, size.height);
+        })
+        .process(|stream, ud| {
+            let Some(mut buffer) = stream.dequeue_buffer() else {
+                return;
+            };
+            let datas = buffer.datas_mut();
+            let Some(d) = datas.first_mut() else { return };
+            let size = ud.format.size();
+            let (w, h) = (size.width, size.height);
+            if w == 0 || h == 0 {
+                return;
+            }
+            let chunk = d.chunk();
+            let (offset, stride, len) = (
+                chunk.offset() as usize,
+                chunk.stride().max(0) as usize,
+                chunk.size() as usize,
+            );
+            if len == 0 || stride < (w as usize) * 4 {
+                return;
+            }
+            let Some(bytes) = d.data() else {
+                // DMA-BUF without a mapping; we never offer modifiers so this
+                // should not happen.
+                return;
+            };
+            let (pix, opaque) = match ud.format.format() {
+                spa::param::video::VideoFormat::BGRA => (PixelFormat::Bgra8, false),
+                spa::param::video::VideoFormat::BGRx => (PixelFormat::Bgra8, true),
+                spa::param::video::VideoFormat::RGBA => (PixelFormat::Rgba8, false),
+                spa::param::video::VideoFormat::RGBx => (PixelFormat::Rgba8, true),
+                other => {
+                    if ud.frames == 0 {
+                        tracing::warn!(?other, "unsupported capture pixel format");
+                    }
+                    ud.frames += 1;
+                    return;
+                }
+            };
+            let row = (w as usize) * 4;
+            let mut out = vec![0u8; row * h as usize];
+            for y in 0..h as usize {
+                let src_start = offset + y * stride;
+                let Some(src) = bytes.get(src_start..src_start + row) else {
+                    break;
+                };
+                let dst = &mut out[y * row..(y + 1) * row];
+                dst.copy_from_slice(src);
+                if opaque {
+                    for px in dst.as_chunks_mut::<4>().0 {
+                        px[3] = 255;
+                    }
+                }
+            }
+            if ud.frames == 0 {
+                tracing::info!(node_id = ud.node_id, width = w, height = h, "first capture frame");
+            }
+            ud.frames += 1;
+            let frame = Frame::Rgba {
+                width: w,
+                height: h,
+                stride: row as u32,
+                format: pix,
+                data: out.into(),
+                t_us: now_us(),
+            };
+            let mut s = ud.slot.m.lock().unwrap();
+            s.latest = Some(frame);
+            s.seq += 1;
+            ud.slot.cv.notify_all();
+        })
+        .register()
+        .map_err(|e| e.to_string())?;
+
+    let obj = spa::pod::object!(
+        spa::utils::SpaTypes::ObjectParamFormat,
+        spa::param::ParamType::EnumFormat,
+        spa::pod::property!(
+            spa::param::format::FormatProperties::MediaType,
+            Id,
+            spa::param::format::MediaType::Video
+        ),
+        spa::pod::property!(
+            spa::param::format::FormatProperties::MediaSubtype,
+            Id,
+            spa::param::format::MediaSubtype::Raw
+        ),
+        spa::pod::property!(
+            spa::param::format::FormatProperties::VideoFormat,
+            Choice,
+            Enum,
+            Id,
+            spa::param::video::VideoFormat::BGRx,
+            spa::param::video::VideoFormat::BGRx,
+            spa::param::video::VideoFormat::BGRA,
+            spa::param::video::VideoFormat::RGBx,
+            spa::param::video::VideoFormat::RGBA,
+        ),
+        spa::pod::property!(
+            spa::param::format::FormatProperties::VideoSize,
+            Choice,
+            Range,
+            Rectangle,
+            spa::utils::Rectangle {
+                width: 1920,
+                height: 1080
+            },
+            spa::utils::Rectangle { width: 1, height: 1 },
+            spa::utils::Rectangle {
+                width: 8192,
+                height: 8192
+            }
+        ),
+        spa::pod::property!(
+            spa::param::format::FormatProperties::VideoFramerate,
+            Choice,
+            Range,
+            Fraction,
+            spa::utils::Fraction {
+                num: fps.max(1),
+                denom: 1
+            },
+            spa::utils::Fraction { num: 0, denom: 1 },
+            spa::utils::Fraction { num: 1000, denom: 1 }
+        ),
+    );
+    let values: Vec<u8> = spa::pod::serialize::PodSerializer::serialize(Cursor::new(Vec::new()), &Value::Object(obj))
+        .map_err(|e| format!("serialize format pod: {e:?}"))?
+        .0
+        .into_inner();
+    let mut params = [Pod::from_bytes(&values).ok_or_else(|| "bad format pod".to_string())?];
+
+    stream
+        .connect(
+            spa::utils::Direction::Input,
+            Some(node_id),
+            pw::stream::StreamFlags::AUTOCONNECT | pw::stream::StreamFlags::MAP_BUFFERS,
+            &mut params,
+        )
+        .map_err(|e| e.to_string())?;
+    Ok((stream, listener))
+}

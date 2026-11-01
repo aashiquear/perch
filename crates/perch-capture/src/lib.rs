@@ -8,7 +8,7 @@
 //!
 //! | Platform | Mechanism | Status |
 //! |----------|-----------|--------|
-//! | Linux (Wayland/X11) | xdg-desktop-portal ScreenCast → PipeWire DMA-BUF | scaffold (`linux-pipewire`) |
+//! | Linux (Wayland/X11) | xdg-desktop-portal ScreenCast → PipeWire (CPU frames) | implemented (`linux-pipewire`) |
 //! | Linux virtual displays | GNOME Mutter `CreateVirtualMonitor` / `wlr-virtual-output` / `evdi` | planned |
 //! | Windows | Windows.Graphics.Capture | scaffold |
 //! | macOS | ScreenCaptureKit | scaffold |
@@ -117,14 +117,37 @@ pub trait CaptureBackend: Send {
     fn create_virtual_display(&mut self, _width: u32, _height: u32) -> Result<Source, CaptureError> {
         Err(CaptureError::Unavailable("virtual displays".into()))
     }
+    /// Interactively pick sources (e.g. the portal dialog). Blocks until the
+    /// user has chosen; returns the newly available sources, which
+    /// [`enumerate`](Self::enumerate) will also list from now on.
+    fn pick(&mut self, _multiple: bool) -> Result<Vec<Source>, CaptureError> {
+        Err(CaptureError::Unavailable("interactive source picking".into()))
+    }
+    /// Re-create the sources of a previous [`pick`](Self::pick) without a
+    /// dialog, from the token that pick returned.
+    fn restore(&mut self, _token: &str) -> Result<Vec<Source>, CaptureError> {
+        Err(CaptureError::Unavailable("restore".into()))
+    }
+    /// Opaque token that [`restore`](Self::restore) accepts, if the last pick
+    /// produced one. Persist it in the config.
+    fn restore_token(&self) -> Option<String> {
+        None
+    }
+    /// Pixel size of a source, if known without opening it.
+    fn source_size(&self, _source: &Source) -> Option<(u32, u32)> {
+        None
+    }
 }
 
-/// Pick the backend for this OS.
-pub fn default_backend() -> Result<Box<dyn CaptureBackend>, CaptureError> {
+/// Pick the backend for this OS. `peer` is our own peer id (sources are
+/// tagged with it).
+pub fn default_backend(peer: uuid::Uuid) -> Result<Box<dyn CaptureBackend>, CaptureError> {
     #[cfg(all(target_os = "linux", feature = "linux-pipewire"))]
     {
-        return Ok(Box::new(linux::PortalBackend::new()?));
+        return Ok(Box::new(linux::PortalBackend::new(peer)?));
     }
+    #[allow(unreachable_code)]
+    let _ = peer;
     #[allow(unreachable_code)]
     Err(CaptureError::Unavailable(
         "no capture backend compiled for this platform; use --features linux-pipewire or the test pattern".into(),
@@ -144,6 +167,9 @@ pub struct TestPattern {
     frame: u64,
     period: std::time::Duration,
     last: std::time::Instant,
+    /// Frame 0, rendered once; later frames are a cheap horizontal rotation
+    /// of it so three 1080p patterns don't eat a CPU core.
+    base: Vec<u8>,
 }
 
 impl TestPattern {
@@ -156,7 +182,29 @@ impl TestPattern {
             frame: 0,
             period: std::time::Duration::from_secs_f64(1.0 / fps.max(1) as f64),
             last: std::time::Instant::now(),
+            base: Self::render(width, height, 0),
         }
+    }
+
+    /// Frame `n`: `base` rotated left by `n` pixels, border kept in place.
+    fn rotated(&self, n: u64) -> Vec<u8> {
+        let (w, h) = (self.width as usize, self.height as usize);
+        let row = w * 4;
+        let shift = (n % w as u64) as usize * 4;
+        let mut out = vec![0u8; row * h];
+        for y in 0..h {
+            let src = &self.base[y * row..(y + 1) * row];
+            let dst = &mut out[y * row..(y + 1) * row];
+            dst[..row - shift].copy_from_slice(&src[shift..]);
+            dst[row - shift..].copy_from_slice(&src[..shift]);
+            if y < 8 || y >= h.saturating_sub(8) {
+                dst.fill(255);
+            } else {
+                dst[..8 * 4].fill(255);
+                dst[row - 8 * 4..].fill(255);
+            }
+        }
+        out
     }
 
     /// Render frame `n` into RGBA. Public so the compositor's tests can use it.
@@ -203,7 +251,7 @@ impl CaptureSource for TestPattern {
         }
         self.last = std::time::Instant::now();
         self.frame += 1;
-        let data = Self::render(self.width, self.height, self.frame);
+        let data = self.rotated(self.frame);
         Ok(Some(Frame::Rgba {
             width: self.width,
             height: self.height,
@@ -225,55 +273,8 @@ pub fn now_us() -> u64 {
     T0.get_or_init(std::time::Instant::now).elapsed().as_micros() as u64
 }
 
-// ---------------------------------------------------------------------------
-// Linux: xdg-desktop-portal + PipeWire
-// ---------------------------------------------------------------------------
-
 #[cfg(all(target_os = "linux", feature = "linux-pipewire"))]
-pub mod linux {
-    //! Flow (works on GNOME, KDE, Sway/wlroots, and X11 via the portal):
-    //!
-    //! 1. `ashpd::desktop::screencast::Screencast::create_session()`
-    //! 2. `select_sources(types = MONITOR | WINDOW, cursor_mode = EMBEDDED, persist = ExplicitlyRevoked)`
-    //!    — persistence token is stored in the config so the user is asked once.
-    //! 3. `start()` → PipeWire node ids.
-    //! 4. `pipewire::stream::Stream` on that node; negotiate `DMA-BUF` with
-    //!    modifiers if available, else `MemFd`.
-    //! 5. Each buffer → [`Frame::External`] (DMA-BUF fd) or [`Frame::Rgba`].
-    //!
-    //! Virtual monitors: on GNOME ≥ 44 use the Mutter
-    //! `org.gnome.Mutter.ScreenCast` `RecordVirtual` D-Bus call; on wlroots use
-    //! `wlr-virtual-output-unstable-v1`; fallback is the `evdi` kernel module.
-    use super::*;
-
-    /// Portal-backed capture.
-    pub struct PortalBackend {}
-
-    impl PortalBackend {
-        /// Connect to the portal.
-        pub fn new() -> Result<Self, CaptureError> {
-            Ok(Self {})
-        }
-    }
-
-    impl CaptureBackend for PortalBackend {
-        fn enumerate(&mut self) -> Result<Vec<Source>, CaptureError> {
-            // The portal does not enumerate; the user picks in the portal
-            // dialog during `open`. Return a single placeholder so the UI can
-            // offer "Share screen…".
-            Ok(vec![Source::Display {
-                peer: uuid::Uuid::nil(),
-                display_index: 0,
-            }])
-        }
-        fn open(&mut self, _source: &Source, _fps: u32) -> Result<Box<dyn CaptureSource>, CaptureError> {
-            Err(CaptureError::Unavailable(
-                "PipeWire capture is scaffolded; see crates/perch-capture/src/lib.rs::linux and docs/ROADMAP.md M2"
-                    .into(),
-            ))
-        }
-    }
-}
+pub mod linux;
 
 #[cfg(test)]
 mod tests {
@@ -297,6 +298,9 @@ mod tests {
 
     #[test]
     fn default_backend_without_features_is_unavailable() {
-        assert!(matches!(default_backend(), Err(CaptureError::Unavailable(_))));
+        assert!(matches!(
+            default_backend(uuid::Uuid::nil()),
+            Err(CaptureError::Unavailable(_))
+        ));
     }
 }

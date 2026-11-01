@@ -5,7 +5,7 @@ One Rust core; per-platform shells. "Host" = drives the glasses. "Controller"
 
 | Platform | Host | Controller | Screen source | Input sink | Notes |
 |---|---|---|---|---|---|
-| Linux (Ubuntu 26.04) | ✅ `perchd` | ✅ `perch` CLI | PipeWire portal (M2) | uinput ✅ | primary target |
+| Linux (Ubuntu 26.04) | ✅ `perchd` | ✅ `perch` CLI | PipeWire portal ✅ (`linux-pipewire`) | uinput ✅ | primary target |
 | Android (S24 Ultra) | ✅ app host mode | ✅ app touchpad | MediaProjection mirror ✅, app-per-display (see below) | Accessibility + IME ✅ | DeX caveats below |
 | Windows 11 | planned (M4) | — | Windows.Graphics.Capture | SendInput | ar-drivers' rusb works on Windows with WinUSB (Zadig) |
 | macOS | planned (M4) | — | ScreenCaptureKit | CGEvent | needs Screen Recording + Accessibility permissions |
@@ -18,7 +18,16 @@ borderless fullscreen winit window on the monitor whose name contains
 `display.monitor_name` ("Rokid"). On GNOME Wayland, keep the glasses as a
 *separate* output (not mirrored) so the laptop screen stays usable.
 
-**Capture (M2):** xdg-desktop-portal ScreenCast → PipeWire. Works on GNOME,
+**Build deps:** `sudo apt install libudev-dev libpipewire-0.3-dev libclang-dev`
+(PipeWire headers + libclang for the `pipewire` crate's bindgen). Build with
+`--features full-linux`.
+
+**Capture:** xdg-desktop-portal ScreenCast → PipeWire. `perch pick --multiple`
+opens the portal dialog; every chosen window/monitor becomes a spatial window
+placed where you are looking (first at gaze, the rest fanned to the right).
+The restore token is saved to `[capture] restore_token` so the next start
+re-attaches the same streams without a dialog. Frames are negotiated as
+BGRx/BGRA/RGBx/RGBA in CPU memory (latest frame wins); DMA-BUF is TODO. Works on GNOME,
 KDE, wlroots and X11. Window-level capture gives one PipeWire stream per OS
 window → one spatial window each. Virtual displays (for "extend"):
 GNOME Mutter `org.gnome.Mutter.ScreenCast.RecordVirtual`, wlroots
