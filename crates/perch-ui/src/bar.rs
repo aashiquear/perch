@@ -31,6 +31,12 @@ pub enum BarAction {
     Calibrate,
     /// Remove all windows.
     Clear,
+    /// Move the focused app back to the laptop (removes its window).
+    ToLaptop,
+    /// Close the focused app and remove its window.
+    CloseApp,
+    /// Toggle the focused window's display between full and half width.
+    Resize,
     /// Toggle: Perch owns the physical mouse/keyboard (spatial pointer on
     /// the glasses) vs. the OS does.
     Grab,
@@ -109,10 +115,17 @@ impl Default for Bar {
                 b("MORE ROWS", Icon::RowsPlus, BarAction::RowsPlus),
                 b("NEARER", Icon::Nearer, BarAction::Nearer),
                 b("FARTHER", Icon::Farther, BarAction::Farther),
-                b("SEND WINDOW", Icon::Pick, BarAction::Pick),
+                b(
+                    "TO GLASSES: LAPTOP'S FOCUSED APP (CTRL+ALT+G)",
+                    Icon::Pick,
+                    BarAction::Pick,
+                ),
+                b("TO LAPTOP: FOCUSED WINDOW", Icon::ToLaptop, BarAction::ToLaptop),
+                b("FULL / HALF WIDTH: FOCUSED WINDOW", Icon::Resize, BarAction::Resize),
+                b("CLOSE APP: FOCUSED WINDOW", Icon::CloseApp, BarAction::CloseApp),
                 b("CALIBRATE", Icon::Calibrate, BarAction::Calibrate),
-                b("CLEAR ALL", Icon::Clear, BarAction::Clear),
-                b("GRAB MOUSE / KEYS", Icon::Grab, BarAction::Grab),
+                b("ALL TO LAPTOP", Icon::Clear, BarAction::Clear),
+                b("GLASSES MODE: MOUSE + KEYS (CTRL+ALT+P)", Icon::Grab, BarAction::Grab),
             ],
         }
     }
@@ -296,7 +309,7 @@ mod tests {
             assert!(pair[0].x + pair[0].w <= pair[1].x, "buttons overlap");
         }
         let pill = bar.pill(1920);
-        assert!(pill.w < 700, "pill too wide: {}", pill.w);
+        assert!(pill.w < 900, "pill too wide: {}", pill.w);
         assert!((pill.x as i32 - (1920 - pill.w) as i32 / 2).abs() <= 1, "centred");
         let r = rects[2];
         assert_eq!(bar.hit(1920, (r.x + 1) as f32, (r.y + 1) as f32), Some(2));

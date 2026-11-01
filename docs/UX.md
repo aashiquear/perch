@@ -125,7 +125,7 @@ app lives only on the glasses; when its spatial window is removed, or the
 daemon exits, the monitor disappears and GNOME moves the app back to the
 laptop. Nothing persists across restarts: send windows again.
 
-- **Send the focused app**: Ctrl+Alt+G (`send_chord_usage`), or the SEND
+- **Move the focused app**: Ctrl+Alt+G (`move_chord_usage`), or the TO GLASSES
   WINDOW tile / panel button (those move whatever is focused, which may be
   Perch's own panel). The daemon injects GNOME's `move-to-monitor-right`
   shortcut as many times as monitors lie to the right of the laptop.
@@ -152,9 +152,19 @@ for itself (rearranging the spatial windows). Both switches, and Ctrl+Alt+G,
 wait until Ctrl and Alt are physically released so no modifier is left stuck
 on either side.
 
-Sending: Ctrl+Alt+G makes a full 1920×1080 glasses display, Ctrl+Alt+H a
-half-width 960×1080 one for chat/terminal-shaped apps (`perch send --width`
-for anything else). The window is then maximized so it fills the display
+Moving: Ctrl+Alt+G makes a full 1920×1080 glasses display, Ctrl+Alt+H a
+half-width 960×1080 one for chat/terminal-shaped apps (`perch move --width`
+for anything else; `perch resize <id> W H`, the bar's FULL/HALF tile or the
+panel's size list re-create a display at another size). TO LAPTOP (bar),
+"To laptop" (panel) or `perch remove` moves the app back; CLOSE APP sends the
+app its close shortcut first. Bar and panel act on the *focused* glasses
+window (the one you last clicked in glasses mode).
+
+Desktop layout: Perch keeps the laptop at the origin, the glasses panel
+*below* it and the virtual displays chained to its right (re-applied with
+`gdctl` whenever a display comes or goes, because Mutter lays a changed
+monitor set out in one row). That way "move window to monitor right" goes
+laptop → display without crossing the glasses' own output. The window is then maximized so it fills the display
 and no desktop background shows; GNOME's `maximize` action is unbound by
 default, so Perch binds it to Ctrl+Super+Alt+F11 the first time (only if it
 was empty).

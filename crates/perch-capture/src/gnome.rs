@@ -30,6 +30,8 @@ const SC: &str = "org.gnome.Mutter.ScreenCast";
 pub const DEFAULT_VIRTUAL_SIZE: (u32, u32) = (1920, 1080);
 const VIRTUAL_FPS: u32 = 60;
 // evdev key codes for GNOME's default shortcuts.
+const KEY_F4: u32 = 62;
+const KEY_LEFT: u32 = 105;
 const KEY_LEFTCTRL: u32 = 29;
 const KEY_LEFTSHIFT: u32 = 42;
 const KEY_LEFTALT: u32 = 56;
@@ -101,6 +103,8 @@ pub struct GnomeBackend {
     layout: Vec<LogicalMonitor>,
     /// Size for the next virtual display.
     pub virtual_size: (u32, u32),
+    /// Connector of the glasses panel (kept out of the move row).
+    glasses_connector: Option<String>,
     /// Maximize a window after sending it, so it fills its display and no
     /// desktop background shows around it.
     pub auto_maximize: bool,
@@ -128,6 +132,7 @@ impl GnomeBackend {
             displays: Vec::new(),
             layout: Vec::new(),
             virtual_size: DEFAULT_VIRTUAL_SIZE,
+            glasses_connector: None,
             auto_maximize: true,
             maximize_bound: false,
         })
@@ -198,6 +203,16 @@ impl GnomeBackend {
         if rect.is_none() {
             tracing::warn!("virtual monitor did not show up in the layout; pointer mapping may be off");
         }
+        // Mutter lays a changed monitor set out in one row, glasses panel
+        // included; put the panel back under the laptop so window moves go
+        // laptop → virtual displays directly, then re-read positions.
+        if self.arrange_layout() {
+            let now = self.layout_now();
+            if let Some(m) = connector.as_ref().and_then(|c| now.iter().find(|m| &m.connector == c)) {
+                rect = Some((m.x, m.y, m.w, m.h));
+            }
+            self.layout = now;
+        }
         tracing::info!(
             index = self.displays.len(),
             node_id = created.node_id,
@@ -205,6 +220,16 @@ impl GnomeBackend {
             ?rect,
             "virtual glasses display created"
         );
+        // Re-read every display's rectangle: arranging moves them.
+        for d in self.displays.iter_mut().flatten() {
+            if let Some(m) = d
+                .connector
+                .as_ref()
+                .and_then(|c| self.layout.iter().find(|m| &m.connector == c))
+            {
+                d.rect = Some((m.x, m.y, m.w, m.h));
+            }
+        }
         self.displays.push(Some(VirtualDisplay {
             index: created.index,
             node_id: created.node_id,
@@ -218,32 +243,125 @@ impl GnomeBackend {
         Ok(self.displays.len() - 1)
     }
 
-    /// Move the focused window onto display `i` with GNOME's
-    /// `move-to-monitor-right` shortcut, as many times as monitors lie
-    /// between the primary (laptop) display and it.
-    fn move_focused_window_to(&mut self, i: usize) {
+    /// Desktop layout Perch wants: laptop at the origin, the glasses panel
+    /// *below* it, virtual displays chained to the right of the laptop.
+    /// Window moves hop monitor by monitor, so with the glasses panel in the
+    /// row every move would cross it (and a missed step leaves the app on
+    /// the glasses' own output). Returns true when a change was applied.
+    fn arrange_layout(&mut self) -> bool {
+        let Some(glasses) = self.glasses_connector.clone() else {
+            return false;
+        };
+        let layout = self.layout_now();
+        let laptop_x = layout
+            .iter()
+            .filter(|m| m.connector.starts_with("eDP") || (m.x == 0 && m.y == 0))
+            .map(|m| m.x)
+            .min()
+            .unwrap_or(0);
+        let Some(laptop) = layout.iter().find(|m| m.x == laptop_x && m.y == 0).cloned() else {
+            return false;
+        };
+        let Some(panel) = layout.iter().find(|m| m.connector == glasses).cloned() else {
+            return false;
+        };
+        let mut virtuals: Vec<&LogicalMonitor> = layout
+            .iter()
+            .filter(|m| m.connector != laptop.connector && m.connector != glasses)
+            .collect();
+        virtuals.sort_by_key(|m| m.x);
+        // Already as wanted?
+        let chained = virtuals
+            .iter()
+            .scan(laptop.x + laptop.w as i32, |next, m| {
+                let ok = m.x == *next && m.y == laptop.y;
+                *next = m.x + m.w as i32;
+                Some(ok)
+            })
+            .all(|ok| ok);
+        if panel.y == laptop.y + laptop.h as i32 && panel.x == laptop.x && chained {
+            return false;
+        }
+        let mut args: Vec<String> = vec!["set".into()];
+        args.extend(["--logical-monitor", "--primary", "--monitor", &laptop.connector].map(String::from));
+        args.extend(["--logical-monitor", "--monitor", &glasses, "--below", &laptop.connector].map(String::from));
+        let mut prev = laptop.connector.clone();
+        for m in virtuals {
+            args.extend(["--logical-monitor", "--monitor", &m.connector, "--right-of", &prev].map(String::from));
+            prev = m.connector.clone();
+        }
+        match std::process::Command::new("gdctl").args(&args).status() {
+            Ok(st) if st.success() => {
+                tracing::info!(
+                    glasses,
+                    "arranged desktop layout: glasses panel below the laptop, displays to the right"
+                );
+                std::thread::sleep(Duration::from_millis(400));
+                true
+            }
+            other => {
+                tracing::warn!("could not arrange monitors with gdctl: {other:?}");
+                false
+            }
+        }
+    }
+
+    /// Click the header bar of the app on display `i` so it has focus before
+    /// a shortcut is sent (shortcuts go to the focused window, which could
+    /// otherwise be anything, including Perch's own windows).
+    fn focus_app_on(&self, i: usize) {
+        let Some(Some(d)) = self.displays.get(i) else { return };
+        let (w, _) = (d.size.0 as f32, d.size.1 as f32);
+        let _ = self.req_tx.send(Req::Inject {
+            display: d.index,
+            events: vec![
+                InputEvent::MouseMoveAbs { x: w / 2.0, y: 12.0 },
+                InputEvent::MouseButton {
+                    button: MouseButton::Left,
+                    down: true,
+                },
+                InputEvent::MouseButton {
+                    button: MouseButton::Left,
+                    down: false,
+                },
+            ],
+        });
+        std::thread::sleep(Duration::from_millis(150));
+    }
+
+    /// X of the laptop display (origin of window moves).
+    fn laptop_x(&self) -> i32 {
+        self.layout
+            .iter()
+            .filter(|m| m.connector.starts_with("eDP") || (m.x == 0 && m.y == 0))
+            .map(|m| m.x)
+            .min()
+            .unwrap_or(0)
+    }
+
+    /// Move the focused window from the display column at `from_x` onto
+    /// display `i` with GNOME's `move-to-monitor-left/right` shortcuts, one
+    /// per monitor column in between.
+    fn move_focused_window_to(&mut self, i: usize, from_x: i32) {
         let Some(Some(d)) = self.displays.get(i) else { return };
         let Some((x, _, _, _)) = d.rect else { return };
         let d_index = d.index;
         let mut xs: Vec<i32> = self.layout.iter().map(|m| m.x).collect();
         xs.sort_unstable();
         xs.dedup();
-        let origin = self
-            .layout
-            .iter()
-            .filter(|m| m.connector.starts_with("eDP") || (m.x == 0 && m.y == 0))
-            .map(|m| m.x)
-            .min()
-            .unwrap_or(0);
-        let from = xs.iter().position(|&v| v == origin).unwrap_or(0);
+        let from = xs.iter().position(|&v| v == from_x).unwrap_or(0);
         let to = xs.iter().position(|&v| v == x).unwrap_or(from);
-        let steps = to.saturating_sub(from);
-        if steps == 0 {
+        if from == to {
             return;
         }
+        let (steps, key) = if to > from {
+            (to - from, KEY_RIGHT)
+        } else {
+            (from - to, KEY_LEFT)
+        };
         let _ = self.req_tx.send(Req::Chord {
             display: d_index,
-            codes: vec![KEY_LEFTMETA, KEY_LEFTSHIFT, KEY_RIGHT],
+            codes: vec![KEY_LEFTMETA, KEY_LEFTSHIFT, key],
             times: steps,
         });
         if self.auto_maximize && self.ensure_maximize_binding() {
@@ -324,13 +442,68 @@ impl CaptureBackend for GnomeBackend {
     /// Send the focused window to a new glasses display.
     fn pick(&mut self, _multiple: bool) -> Result<Vec<Source>, CaptureError> {
         let i = self.create_display()?;
-        self.move_focused_window_to(i);
+        let from = self.laptop_x();
+        self.move_focused_window_to(i, from);
         Ok(vec![self.source_for(i)])
     }
 
-    fn send_window(&mut self, width: u32, height: u32) -> Result<Vec<Source>, CaptureError> {
+    fn move_to_glasses(&mut self, width: u32, height: u32) -> Result<Vec<Source>, CaptureError> {
         self.virtual_size = (width, height);
         self.pick(false)
+    }
+
+    fn close_app(&mut self, source: &Source) {
+        let Some(d) = self.display_for(source) else { return };
+        let (slot_i, d_index) = (
+            match source {
+                Source::Display { display_index, .. } => *display_index as usize,
+                _ => return,
+            },
+            d.index,
+        );
+        self.focus_app_on(slot_i);
+        let _ = self.req_tx.send(Req::Chord {
+            display: d_index,
+            codes: vec![KEY_LEFTALT, KEY_F4],
+            times: 1,
+        });
+        // Let the app go before its display is torn down.
+        std::thread::sleep(Duration::from_millis(400));
+    }
+
+    fn resize_display(&mut self, source: &Source, width: u32, height: u32) -> Result<Source, CaptureError> {
+        let old = self
+            .display_for(source)
+            .ok_or_else(|| CaptureError::Other("unknown virtual display".into()))?;
+        let from_x = old.rect.map(|r| r.0).unwrap_or_else(|| self.laptop_x());
+        let old_slot = match source {
+            Source::Display { display_index, .. } => *display_index as usize,
+            _ => unreachable!("display_for matched"),
+        };
+        self.virtual_size = (width.max(320), height.max(240));
+        let i = self.create_display()?;
+        // Positions shift when a display is added; use the refreshed ones.
+        let from_x = self
+            .displays
+            .get(old_slot)
+            .and_then(|d| d.as_ref())
+            .and_then(|d| d.rect.map(|r| r.0))
+            .unwrap_or(from_x);
+        self.focus_app_on(old_slot);
+        self.move_focused_window_to(i, from_x);
+        // The chord runs on the D-Bus thread; give it time before the old
+        // display disappears under the window.
+        std::thread::sleep(Duration::from_millis(600));
+        self.release(source);
+        Ok(self.source_for(i))
+    }
+
+    fn set_glasses_connector(&mut self, connector: &str) {
+        self.glasses_connector = Some(connector.to_string());
+        self.layout = self.layout_now();
+        if self.arrange_layout() {
+            self.layout = self.layout_now();
+        }
     }
 
     fn restore(&mut self, _token: &str) -> Result<Vec<Source>, CaptureError> {
@@ -383,14 +556,28 @@ impl CaptureBackend for GnomeBackend {
 
     fn release_pointer(&mut self) {
         let _ = self.req_tx.send(Req::ReleaseKeys);
-        // Virtual monitors sit to the right of the layout: a large leftward
-        // motion lands on the leftmost physical display.
+        // Park the OS pointer in the middle of the laptop display: a huge
+        // up-left motion reaches the top-left corner of the layout, then
+        // half the laptop's logical size.
+        let laptop_x = self.laptop_x();
+        let (w, h) = self
+            .layout
+            .iter()
+            .find(|m| m.x == laptop_x && m.y == 0)
+            .map(|m| (m.w, m.h))
+            .unwrap_or((2048.0, 1280.0));
         if let Some(d) = self.displays.iter().flatten().next() {
             let _ = self.req_tx.send(Req::Inject {
                 display: d.index,
                 events: vec![
-                    InputEvent::MouseMove { dx: -30000.0, dy: 0.0 },
-                    InputEvent::MouseMove { dx: 400.0, dy: 0.0 },
+                    InputEvent::MouseMove {
+                        dx: -30000.0,
+                        dy: -30000.0,
+                    },
+                    InputEvent::MouseMove {
+                        dx: w / 2.0,
+                        dy: h / 2.0,
+                    },
                 ],
             });
         }
@@ -411,7 +598,20 @@ impl CaptureBackend for GnomeBackend {
             self.pw.disconnect(d.pw_key);
             d.slot.end();
             let _ = self.req_tx.send(Req::Stop { display: d.index });
+            // Mutter re-lays the remaining monitors out in a row; restore
+            // the laptop / glasses-below / displays-right arrangement.
+            std::thread::sleep(Duration::from_millis(400));
+            self.arrange_layout();
             self.layout = self.layout_now();
+            for d in self.displays.iter_mut().flatten() {
+                if let Some(m) = d
+                    .connector
+                    .as_ref()
+                    .and_then(|c| self.layout.iter().find(|m| &m.connector == c))
+                {
+                    d.rect = Some((m.x, m.y, m.w, m.h));
+                }
+            }
         }
     }
 

@@ -156,9 +156,22 @@ pub trait CaptureBackend: Send {
     /// size. Backends without virtual displays fall back to [`pick`].
     ///
     /// [`pick`]: CaptureBackend::pick
-    fn send_window(&mut self, _width: u32, _height: u32) -> Result<Vec<Source>, CaptureError> {
+    fn move_to_glasses(&mut self, _width: u32, _height: u32) -> Result<Vec<Source>, CaptureError> {
         self.pick(false)
     }
+
+    /// Close the host application behind `source` (platform close shortcut).
+    fn close_app(&mut self, _source: &Source) {}
+
+    /// Re-create the display behind `source` at a new size and move its app
+    /// there. Returns the replacement source.
+    fn resize_display(&mut self, _source: &Source, _width: u32, _height: u32) -> Result<Source, CaptureError> {
+        Err(CaptureError::Unavailable("this backend cannot resize displays".into()))
+    }
+
+    /// Tell the backend which connector is the glasses panel so it can keep
+    /// the desktop layout friendly to window moves.
+    fn set_glasses_connector(&mut self, _connector: &str) {}
 
     /// A spatial window showing `source` was removed; backends that created
     /// something for it (a virtual monitor) tear it down so its apps return.

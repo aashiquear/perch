@@ -144,6 +144,24 @@ impl Interaction {
     }
 
     /// Is Perch holding the physical mouse/keyboard?
+    /// Called by the renderer when the grab flips. On grab start the OS
+    /// pointer is wherever the laptop left it; put it under the spatial
+    /// pointer right away instead of waiting for the first motion.
+    pub fn grab_changed(&mut self, grabbed: bool, ctx: &FrameCtx) {
+        if !grabbed {
+            return;
+        }
+        if let (Some(id), Some((x, y))) = (self.hovered, self.cursor) {
+            let (vx, vy) = ctx.view_xy(x, y);
+            if let Some((u, v)) = ctx.window_uv(id, vx, vy) {
+                let _ = self.commands.send(UiMsg::Input {
+                    window: id,
+                    events: vec![InputEvent::MouseMoveAbs { x: u, y: v }],
+                });
+            }
+        }
+    }
+
     pub fn grabbed(&self) -> bool {
         self.grab.load(Ordering::Relaxed)
     }
@@ -318,7 +336,30 @@ impl Interaction {
         let cmd = match action {
             BarAction::Recenter => Command::Recenter,
             BarAction::Arrange => Command::ArrangeGrid,
-            BarAction::Pick => Command::PickSources { multiple: true },
+            BarAction::Pick => Command::MoveToGlasses {
+                width: 1920,
+                height: 1080,
+            },
+            BarAction::ToLaptop => match engine.ws.focused {
+                Some(id) => Command::RemoveWindow { id },
+                None => return,
+            },
+            BarAction::CloseApp => match engine.ws.focused {
+                Some(id) => Command::CloseAppWindow { id },
+                None => return,
+            },
+            BarAction::Resize => match engine.ws.focused {
+                Some(id) => {
+                    let (w, h) = engine.ws.sizes.get(&id).copied().unwrap_or((1920, 1080));
+                    let width = if w > 1400 { 960 } else { 1920 };
+                    Command::ResizeDisplay {
+                        id,
+                        width,
+                        height: h.max(240),
+                    }
+                }
+                None => return,
+            },
             BarAction::Calibrate => Command::Calibrate { seconds: 30 },
             BarAction::RowsMinus => Command::SetGrid {
                 grid: perch_proto::Grid {

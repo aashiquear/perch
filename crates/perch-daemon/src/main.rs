@@ -90,6 +90,11 @@ fn main() -> anyhow::Result<()> {
     )));
     let dev = device::spawn(cfg.clone(), Some(paths.clone()), source);
     let backend = capture::init(cfg.peer_id);
+    if let Ok(mut b) = backend.lock() {
+        if let Some(b) = b.as_mut() {
+            b.set_glasses_connector(&cfg.display.monitor_name);
+        }
+    }
     #[cfg(feature = "linux-pipewire")]
     {
         let n = engine.blocking_lock().prune_local_captures().len();
@@ -111,8 +116,8 @@ fn main() -> anyhow::Result<()> {
         let grab = Arc::clone(&grab);
         let panic_key = cfg.input.panic_key_usage;
         let chord_key = cfg.input.grab_chord_usage;
-        let send_key = cfg.input.send_chord_usage;
-        let send_half_key = cfg.input.send_half_chord_usage;
+        let send_key = cfg.input.move_chord_usage;
+        let send_half_key = cfg.input.move_half_chord_usage;
         let ui_tx2 = ui_tx.clone();
         if cfg.input.share_local_devices {
             std::thread::Builder::new()
@@ -162,7 +167,7 @@ fn main() -> anyhow::Result<()> {
                         if let perch_proto::InputEvent::Key { mods, .. } = ev {
                             if mods & 5 == 0 {
                                 if let Some(size) = send_pending.take() {
-                                    let _ = ui_tx2.send(capture::UiMsg::Command(perch_proto::Command::SendWindow {
+                                    let _ = ui_tx2.send(capture::UiMsg::Command(perch_proto::Command::MoveToGlasses {
                                         width: size.0,
                                         height: size.1,
                                     }));

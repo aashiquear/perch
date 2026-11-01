@@ -59,6 +59,7 @@ pub struct RenderApp {
     panel_last: Instant,
     /// Last check that the glasses window still sits on its monitor.
     monitor_check: Instant,
+    was_grabbed: bool,
     host: String,
     last_fps: f32,
 }
@@ -127,6 +128,7 @@ impl RenderApp {
             panel: None,
             panel_last: Instant::now(),
             monitor_check: Instant::now(),
+            was_grabbed: false,
             host: String::new(),
             last_fps: 0.0,
         }
@@ -230,6 +232,14 @@ impl RenderApp {
         self.stats.add(dt);
         self.last_fps = self.stats.last_fps;
 
+        // Grab flips: re-sync the OS pointer under the spatial one.
+        let grabbed_now = self.interact.grabbed();
+        if grabbed_now != self.was_grabbed {
+            self.was_grabbed = grabbed_now;
+            if let Some(ctx) = self.ctx.clone() {
+                self.interact.grab_changed(grabbed_now, &ctx);
+            }
+        }
         // Physical input while grabbed drives the spatial pointer.
         if let (Some(rx), Some(ctx)) = (self.capture.device_rx.as_ref(), self.ctx.clone()) {
             let batch: Vec<perch_proto::InputEvent> = std::iter::from_fn(|| rx.try_recv().ok()).collect();
@@ -429,7 +439,9 @@ impl ApplicationHandler for RenderApp {
             return;
         }
         match event {
-            WindowEvent::CloseRequested => el.exit(),
+            // Alt+F4 or a WM close must never take the glasses view down
+            // (shortcuts Perch injects could land here); quit from the panel.
+            WindowEvent::CloseRequested => tracing::info!("ignoring close request on the glasses window"),
             WindowEvent::Resized(s) => {
                 if let Some(c) = self.comp.as_mut() {
                     c.resize(s.width, s.height);

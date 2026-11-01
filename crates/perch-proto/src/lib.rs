@@ -575,11 +575,28 @@ pub enum Command {
     },
     /// Move the host's focused window onto a new glasses display of this
     /// pixel size (a virtual monitor where supported; otherwise behaves like
-    /// `pick_sources`). Since 1.5.
-    SendWindow {
+    /// `pick_sources`). Moving it back is `remove_window`. Since 1.5.
+    MoveToGlasses {
         /// Display width in pixels.
         width: u32,
         /// Display height in pixels.
+        height: u32,
+    },
+    /// Close the host application window shown by this spatial window (the
+    /// platform's close shortcut is sent to it), then remove the spatial
+    /// window. Since 1.5.
+    CloseAppWindow {
+        /// Spatial window id.
+        id: WindowId,
+    },
+    /// Re-create the glasses display behind this window at a new pixel size
+    /// and move the app onto it. Since 1.5.
+    ResizeDisplay {
+        /// Spatial window id.
+        id: WindowId,
+        /// New display width in pixels.
+        width: u32,
+        /// New display height in pixels.
         height: u32,
     },
     /// Replace the slot grid and re-place every slotted window. Since 1.2.
@@ -794,12 +811,32 @@ mod tests {
         assert_eq!(Message::from_json(&s).unwrap(), m);
 
         // Since 1.5.
-        let m = Message::Command(Command::SendWindow {
+        let m = Message::Command(Command::MoveToGlasses {
             width: 960,
             height: 1080,
         });
         let s = m.to_json().unwrap();
-        assert_eq!(s, r#"{"msg":"command","cmd":"send_window","width":960,"height":1080}"#);
+        assert_eq!(
+            s,
+            r#"{"msg":"command","cmd":"move_to_glasses","width":960,"height":1080}"#
+        );
+        assert_eq!(Message::from_json(&s).unwrap(), m);
+        let id = Uuid::nil();
+        let m = Message::Command(Command::CloseAppWindow { id });
+        assert_eq!(
+            m.to_json().unwrap(),
+            format!(r#"{{"msg":"command","cmd":"close_app_window","id":"{id}"}}"#)
+        );
+        let m = Message::Command(Command::ResizeDisplay {
+            id,
+            width: 960,
+            height: 1080,
+        });
+        let s = m.to_json().unwrap();
+        assert_eq!(
+            s,
+            format!(r#"{{"msg":"command","cmd":"resize_display","id":"{id}","width":960,"height":1080}}"#)
+        );
         assert_eq!(Message::from_json(&s).unwrap(), m);
     }
 

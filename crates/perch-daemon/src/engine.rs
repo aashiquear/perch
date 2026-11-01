@@ -44,6 +44,22 @@ pub enum Effect {
     },
     /// A local window was removed: let the capture backend free its source.
     ReleaseSource(perch_proto::Source),
+    /// Close the host app behind a window, then remove the window.
+    CloseApp {
+        /// Spatial window.
+        id: WindowId,
+        /// Its source.
+        source: perch_proto::Source,
+    },
+    /// Re-create a window's glasses display at a new size.
+    ResizeDisplay {
+        /// Spatial window.
+        id: WindowId,
+        /// Its current source.
+        source: perch_proto::Source,
+        /// Requested size.
+        size: (u32, u32),
+    },
 }
 
 /// Engine state.
@@ -215,13 +231,34 @@ impl Engine {
                 self.pick_yaw = Some(perch_space::gaze_angles(&self.pose).0);
                 fx.push(Effect::PickSources { multiple, size: None });
             }
-            Command::SendWindow { width, height } => {
+            Command::MoveToGlasses { width, height } => {
                 self.pick_yaw = Some(perch_space::gaze_angles(&self.pose).0);
                 fx.push(Effect::PickSources {
                     multiple: false,
                     size: Some((width.max(320), height.max(240))),
                 });
             }
+            Command::CloseAppWindow { id } => match self.ws.get(id) {
+                Some(w) if perch_input::source_peer(&w.source) == self.me.peer_id => {
+                    fx.push(Effect::CloseApp {
+                        id,
+                        source: w.source.clone(),
+                    });
+                }
+                Some(_) => fx.push(err("can only close apps on this host")),
+                None => fx.push(err("no such window")),
+            },
+            Command::ResizeDisplay { id, width, height } => match self.ws.get(id) {
+                Some(w) if perch_input::source_peer(&w.source) == self.me.peer_id => {
+                    fx.push(Effect::ResizeDisplay {
+                        id,
+                        source: w.source.clone(),
+                        size: (width.max(320), height.max(240)),
+                    });
+                }
+                Some(_) => fx.push(err("can only resize displays on this host")),
+                None => fx.push(err("no such window")),
+            },
             Command::SetGrid { grid } => {
                 let moved = self.ws.set_grid(grid);
                 for id in moved {
@@ -345,6 +382,25 @@ impl Engine {
     /// have a window are skipped (restore after restart), so this is
     /// idempotent. When real windows arrive, our own `Virtual` placeholders
     /// (preset demos) go away first.
+    /// Swap a window's capture source (after its glasses display was
+    /// re-created) and record the new pixel size.
+    pub fn replace_source(&mut self, id: WindowId, source: perch_proto::Source, px: (u32, u32)) -> Vec<Effect> {
+        let mut fx = Vec::new();
+        let Some(w) = self.ws.windows.iter_mut().find(|w| w.id == id) else {
+            return fx;
+        };
+        w.source = source;
+        for moved in self.ws.set_size_px(id, px) {
+            if let Some(w) = self.ws.get(moved) {
+                fx.push(Effect::Broadcast(Event::WindowChanged(w.clone())));
+            }
+        }
+        if let Some(w) = self.ws.get(id) {
+            fx.push(Effect::Broadcast(Event::WindowChanged(w.clone())));
+        }
+        fx
+    }
+
     /// Drop windows whose capture handles belong to a previous run. Portal
     /// stream indices restart at zero every launch, so a saved `portal:1`
     /// would silently show whatever stream 1 is now (a duplicate of another

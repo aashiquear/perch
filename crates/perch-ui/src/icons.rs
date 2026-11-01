@@ -29,6 +29,12 @@ pub enum Icon {
     Clear,
     /// Pointer arrow.
     Grab,
+    /// Laptop with an arrow pointing into it.
+    ToLaptop,
+    /// Window with a cross: close the app.
+    CloseApp,
+    /// Horizontal double arrow: resize the display.
+    Resize,
 }
 
 /// 24×24 coverage mask (0 or 255 per cell).
@@ -158,6 +164,27 @@ pub fn mask(icon: Icon) -> Mask {
             line(&mut m, 11, 14, 15, 22);
             line(&mut m, 4, 19, 8, 15);
             line(&mut m, 8, 15, 15, 22);
+        }
+        Icon::ToLaptop => {
+            rect(&mut m, 5, 11, 18, 18, false);
+            line(&mut m, 2, 21, 21, 21);
+            line(&mut m, 20, 2, 12, 10);
+            line(&mut m, 12, 10, 12, 5);
+            line(&mut m, 12, 10, 17, 10);
+        }
+        Icon::CloseApp => {
+            rect(&mut m, 2, 3, 21, 20, false);
+            line(&mut m, 2, 7, 21, 7);
+            line(&mut m, 7, 10, 16, 18);
+            line(&mut m, 16, 10, 7, 18);
+        }
+        Icon::Resize => {
+            line(&mut m, 2, 12, 21, 12);
+            line(&mut m, 2, 12, 6, 8);
+            line(&mut m, 2, 12, 6, 16);
+            line(&mut m, 21, 12, 17, 8);
+            line(&mut m, 21, 12, 17, 16);
+            rect(&mut m, 8, 4, 15, 20, false);
         }
     }
     m

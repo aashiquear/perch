@@ -63,8 +63,8 @@ enum Cmd {
         multiple: bool,
     },
     /// Move the host's focused window onto a new glasses display (GNOME:
-    /// a virtual monitor of this size). Since protocol 1.5.
-    Send {
+    /// a virtual monitor of this size). `perch remove <id>` moves it back.
+    Move {
         /// Display width in pixels.
         #[arg(long, default_value_t = 1920)]
         width: u32,
@@ -72,8 +72,13 @@ enum Cmd {
         #[arg(long, default_value_t = 1080)]
         height: u32,
     },
-    /// Remove a window.
+    /// Remove a window (its app moves back to the laptop).
+    #[command(alias = "move-back")]
     Remove { id: String },
+    /// Close the app behind a window, then remove the window.
+    CloseApp { id: String },
+    /// Re-create a window's glasses display at a new size (e.g. 960 1080).
+    Resize { id: String, width: u32, height: u32 },
     /// Remove every window.
     Clear,
     /// Show or change the layout grid (lengths in metres, angles in degrees).
@@ -366,7 +371,15 @@ async fn main() -> anyhow::Result<()> {
         },
         Cmd::Preset { name } => Command::ApplyPreset { name },
         Cmd::Pick { multiple } => Command::PickSources { multiple },
-        Cmd::Send { width, height } => Command::SendWindow { width, height },
+        Cmd::Move { width, height } => Command::MoveToGlasses { width, height },
+        Cmd::CloseApp { id } => Command::CloseAppWindow {
+            id: resolve_id(&id, &ids)?,
+        },
+        Cmd::Resize { id, width, height } => Command::ResizeDisplay {
+            id: resolve_id(&id, &ids)?,
+            width,
+            height,
+        },
         Cmd::Remove { id } => Command::RemoveWindow {
             id: resolve_id(&id, &ids)?,
         },
@@ -422,7 +435,7 @@ async fn main() -> anyhow::Result<()> {
         } => Command::LoadLayout { name },
         Cmd::Record { .. } | Cmd::Discover => unreachable!(),
     };
-    let is_pick = matches!(cmd, Command::PickSources { .. } | Command::SendWindow { .. });
+    let is_pick = matches!(cmd, Command::PickSources { .. } | Command::MoveToGlasses { .. });
     let fire_and_forget = matches!(
         cmd,
         Command::Recenter | Command::Calibrate { .. } | Command::SetDisplayMode { .. } | Command::SetBrightness { .. }

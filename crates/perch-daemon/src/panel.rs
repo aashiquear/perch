@@ -250,11 +250,24 @@ impl ControlPanel {
 
         ui.horizontal_wrapped(|ui| {
             if ui
-                .button("Send focused window")
-                .on_hover_text("Ctrl+Alt+G from the app itself; this button moves whatever is focused")
+                .button("To glasses (Ctrl+Alt+G)")
+                .on_hover_text("Moves the laptop's focused window to a full 1920×1080 glasses display. Prefer the hotkey from inside the app: this button moves whatever is focused.")
                 .clicked()
             {
-                out.push(Command::PickSources { multiple: true });
+                out.push(Command::MoveToGlasses {
+                    width: 1920,
+                    height: 1080,
+                });
+            }
+            if ui
+                .button("To glasses, half width (Ctrl+Alt+H)")
+                .on_hover_text("Same, onto a 960×1080 display for narrow apps")
+                .clicked()
+            {
+                out.push(Command::MoveToGlasses {
+                    width: 960,
+                    height: 1080,
+                });
             }
             if ui.button("Arrange").clicked() {
                 out.push(Command::ArrangeGrid);
@@ -274,7 +287,7 @@ impl ControlPanel {
             if ui.button("Calibrate (30 s)").clicked() {
                 out.push(Command::Calibrate { seconds: 30 });
             }
-            if ui.button("Clear").clicked() {
+            if ui.button("All to laptop").on_hover_text("Remove every window; apps return to the laptop").clicked() {
                 for w in &s.windows {
                     out.push(Command::RemoveWindow { id: w.id });
                 }
@@ -283,7 +296,7 @@ impl ControlPanel {
         let grabbed = self.grab.load(Ordering::Relaxed);
         let mut g = grabbed;
         if ui
-            .checkbox(&mut g, "Perch owns mouse & keyboard (Scroll Lock toggles)")
+            .checkbox(&mut g, "Glasses mode: mouse & keyboard go to the glasses (Ctrl+Alt+P)")
             .changed()
         {
             *grab_toggle = true;
@@ -338,9 +351,21 @@ impl ControlPanel {
                     };
                     ui.label(text);
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if ui.small_button("✕").on_hover_text("Remove").clicked() {
+                        if ui
+                            .small_button("Close app")
+                            .on_hover_text("Close the application, then remove the window")
+                            .clicked()
+                        {
+                            out.push(Command::CloseAppWindow { id: w.id });
+                        }
+                        if ui
+                            .small_button("To laptop")
+                            .on_hover_text("Remove the window; the app returns to the laptop")
+                            .clicked()
+                        {
                             out.push(Command::RemoveWindow { id: w.id });
                         }
+                        size_combo(ui, w.id, out);
                         if ui.small_button("Pin").on_hover_text("Pin where I'm looking").clicked() {
                             out.push(Command::PinHere { id: w.id });
                         }
@@ -378,6 +403,27 @@ impl ControlPanel {
                     .weak(),
             );
         });
+    }
+}
+
+fn size_combo(ui: &mut egui::Ui, id: WindowId, out: &mut Vec<Command>) {
+    let mut pick: Option<(u32, u32)> = None;
+    egui::ComboBox::from_id_salt(("size", id))
+        .selected_text("display size")
+        .show_ui(ui, |ui| {
+            for (label, w, h) in [
+                ("full 1920×1080", 1920u32, 1080u32),
+                ("half 960×1080", 960, 1080),
+                ("wide 2560×1080", 2560, 1080),
+                ("tall 1080×1440", 1080, 1440),
+            ] {
+                if ui.selectable_label(false, label).clicked() {
+                    pick = Some((w, h));
+                }
+            }
+        });
+    if let Some((width, height)) = pick {
+        out.push(Command::ResizeDisplay { id, width, height });
     }
 }
 

@@ -5,7 +5,9 @@ use crate::config::Config;
 use crate::device::{DeviceCommand, DeviceEvent, DeviceHandle};
 use crate::engine::{Effect, Engine};
 use perch_net::{ControlServer, Discovery, Inbound, StreamSocket};
-use perch_proto::{Capabilities, Event, Hello, InputEvent, Message, Platform, StreamPacket, PROTOCOL_VERSION};
+use perch_proto::{
+    Capabilities, Command, Event, Hello, InputEvent, Message, Platform, StreamPacket, WindowId, PROTOCOL_VERSION,
+};
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -41,6 +43,14 @@ pub type LocalSink = Option<Box<dyn perch_input::InputSink>>;
 /// Result of a portal pick/restore, delivered back to the main loop.
 type PickOutcome = Result<Vec<(perch_proto::Source, Option<(u32, u32)>)>, String>;
 
+/// Result of a blocking backend job started from an effect.
+enum SideOutcome {
+    /// The app behind `id` was told to close; now remove the window.
+    Closed(WindowId),
+    /// `id`'s display was re-created with this source and size.
+    Resized(WindowId, Result<(perch_proto::Source, (u32, u32)), String>),
+}
+
 /// Run a pick (or restore) on the blocking pool and report back.
 fn spawn_pick(
     backend: SharedBackend,
@@ -58,7 +68,7 @@ fn spawn_pick(
             let sources = match restore {
                 Some(tok) => b.restore(&tok),
                 None => match size {
-                    Some((w, h)) => b.send_window(w, h),
+                    Some((w, h)) => b.move_to_glasses(w, h),
                     None => b.pick(multiple),
                 },
             }
@@ -181,6 +191,7 @@ pub async fn run(
 
     // Capture picks run on the blocking pool and report back here.
     let (pick_tx, mut pick_rx) = mpsc::unbounded_channel::<PickOutcome>();
+    let (side_tx, mut side_rx) = mpsc::unbounded_channel::<SideOutcome>();
     if !cfg.capture.restore_token.is_empty() {
         tracing::info!("restoring last screen-capture selection");
         spawn_pick(
@@ -208,31 +219,31 @@ pub async fn run(
                         _ => vec![],
                     }
                 };
-                apply_effects(fx, &server, &dev, &mut local_sink, &engine, &backend, &pick_tx).await;
+                apply_effects(fx, &server, &dev, &mut local_sink, &engine, &backend, &pick_tx, &side_tx).await;
                 // Track joins/leaves by diffing the server's peer list.
                 let now: HashMap<Uuid, Hello> = server.peers().await.into_iter().map(|h| (h.peer_id, h)).collect();
                 for gone in known_peers.keys().filter(|k| !now.contains_key(k)).copied().collect::<Vec<_>>() {
                     let fx = engine.lock().await.peer_left(gone);
-                    apply_effects(fx, &server, &dev, &mut local_sink, &engine, &backend, &pick_tx).await;
+                    apply_effects(fx, &server, &dev, &mut local_sink, &engine, &backend, &pick_tx, &side_tx).await;
                 }
                 for (id, h) in &now {
                     if !known_peers.contains_key(id) {
                         let fx = engine.lock().await.peer_joined(h.clone());
-                        apply_effects(fx, &server, &dev, &mut local_sink, &engine, &backend, &pick_tx).await;
+                        apply_effects(fx, &server, &dev, &mut local_sink, &engine, &backend, &pick_tx, &side_tx).await;
                     }
                 }
                 known_peers = now;
             }
             Some(evs) = stream_in_rx.recv() => {
                 let fx = engine.lock().await.input(evs);
-                apply_effects(fx, &server, &dev, &mut local_sink, &engine, &backend, &pick_tx).await;
+                apply_effects(fx, &server, &dev, &mut local_sink, &engine, &backend, &pick_tx, &side_tx).await;
             }
             Some(msg) = ui_rx.recv() => {
                 let me = cfg.peer_id;
                 match msg {
                     UiMsg::Command(cmd) => {
                         let fx = engine.lock().await.command(me, cmd);
-                        apply_effects(fx, &server, &dev, &mut local_sink, &engine, &backend, &pick_tx).await;
+                        apply_effects(fx, &server, &dev, &mut local_sink, &engine, &backend, &pick_tx, &side_tx).await;
                     }
                     UiMsg::GrabChanged(grabbed) => {
                         if !grabbed {
@@ -279,6 +290,17 @@ pub async fn run(
                     }
                 }
             }
+            Some(outcome) = side_rx.recv() => {
+                let fx = match outcome {
+                    SideOutcome::Closed(id) => engine.lock().await.command(cfg.peer_id, Command::RemoveWindow { id }),
+                    SideOutcome::Resized(id, Ok((source, px))) => engine.lock().await.replace_source(id, source, px),
+                    SideOutcome::Resized(_, Err(msg)) => {
+                        tracing::warn!("resize display failed: {msg}");
+                        vec![Effect::Broadcast(Event::Error { message: format!("resize: {msg}") })]
+                    }
+                };
+                apply_effects(fx, &server, &dev, &mut local_sink, &engine, &backend, &pick_tx, &side_tx).await;
+            }
             Some(outcome) = pick_rx.recv() => {
                 let fx = match outcome {
                     Ok(picked) => {
@@ -316,7 +338,7 @@ pub async fn run(
                         }
                     }
                 };
-                apply_effects(fx, &server, &dev, &mut local_sink, &engine, &backend, &pick_tx).await;
+                apply_effects(fx, &server, &dev, &mut local_sink, &engine, &backend, &pick_tx, &side_tx).await;
             }
             Some(ev) = dev.events_rx.recv() => {
                 let fx = {
@@ -347,7 +369,7 @@ pub async fn run(
                         DeviceEvent::Worn(_) => vec![],
                     }
                 };
-                apply_effects(fx, &server, &dev, &mut local_sink, &engine, &backend, &pick_tx).await;
+                apply_effects(fx, &server, &dev, &mut local_sink, &engine, &backend, &pick_tx, &side_tx).await;
             }
             _ = shutdown_signal() => {
                 tracing::info!("shutting down");
@@ -366,6 +388,7 @@ async fn apply_effects(
     engine: &Arc<Mutex<Engine>>,
     backend: &SharedBackend,
     pick_tx: &mpsc::UnboundedSender<PickOutcome>,
+    side_tx: &mpsc::UnboundedSender<SideOutcome>,
 ) {
     for f in fx {
         match f {
@@ -398,6 +421,32 @@ async fn apply_effects(
                         b.release(&source);
                     }
                 }
+            }
+            Effect::CloseApp { id, source } => {
+                let backend = Arc::clone(backend);
+                let tx = side_tx.clone();
+                tokio::task::spawn_blocking(move || {
+                    if let Ok(mut b) = backend.lock() {
+                        if let Some(b) = b.as_mut() {
+                            b.close_app(&source);
+                        }
+                    }
+                    let _ = tx.send(SideOutcome::Closed(id));
+                });
+            }
+            Effect::ResizeDisplay { id, source, size } => {
+                let backend = Arc::clone(backend);
+                let tx = side_tx.clone();
+                tokio::task::spawn_blocking(move || {
+                    let res = (|| {
+                        let mut guard = backend.lock().map_err(|_| "capture backend poisoned".to_string())?;
+                        let b = guard.as_mut().ok_or_else(|| "no capture backend".to_string())?;
+                        let new = b.resize_display(&source, size.0, size.1).map_err(|e| e.to_string())?;
+                        let px = b.source_size(&new).unwrap_or(size);
+                        Ok((new, px))
+                    })();
+                    let _ = tx.send(SideOutcome::Resized(id, res));
+                });
             }
             Effect::DeliverInput { peer, events } => {
                 let me = engine.lock().await.me.peer_id;
