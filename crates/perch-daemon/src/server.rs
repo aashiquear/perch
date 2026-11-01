@@ -320,7 +320,7 @@ pub async fn run(
                 };
                 apply_effects(fx, &server, &dev, &mut local_sink, &engine, &backend, &pick_tx).await;
             }
-            _ = tokio::signal::ctrl_c() => {
+            _ = shutdown_signal() => {
                 tracing::info!("shutting down");
                 engine.lock().await.save();
                 return Ok(());
@@ -373,4 +373,21 @@ async fn apply_effects(
             }
         }
     }
+}
+
+/// Ctrl-C or SIGTERM (what `pkill`/systemd send), so shutdown is always clean.
+async fn shutdown_signal() {
+    #[cfg(unix)]
+    {
+        let mut term = match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
+            Ok(t) => t,
+            Err(_) => return tokio::signal::ctrl_c().await.unwrap_or(()),
+        };
+        tokio::select! {
+            _ = tokio::signal::ctrl_c() => {}
+            _ = term.recv() => {}
+        }
+    }
+    #[cfg(not(unix))]
+    let _ = tokio::signal::ctrl_c().await;
 }

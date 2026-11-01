@@ -61,6 +61,8 @@ enum PortalReq {
         restore_token: Option<String>,
         reply: mpsc::Sender<Result<PickResult, CaptureError>>,
     },
+    /// Close every live portal session (persists the restore selection).
+    Close { reply: mpsc::Sender<()> },
 }
 
 /// One picked stream as the portal describes it.
@@ -233,6 +235,13 @@ impl CaptureBackend for PortalBackend {
         self.restore_token.clone()
     }
 
+    fn close(&mut self) {
+        let (reply, rx) = mpsc::channel();
+        if self.req_tx.send(PortalReq::Close { reply }).is_ok() {
+            let _ = rx.recv_timeout(Duration::from_secs(3));
+        }
+    }
+
     fn source_size(&self, source: &Source) -> Option<(u32, u32)> {
         self.stream_for(source).and_then(|s| s.size)
     }
@@ -295,6 +304,14 @@ fn portal_thread(rx: mpsc::Receiver<PortalReq>) {
                     live.push(session);
                     r
                 }));
+            }
+            PortalReq::Close { reply } => {
+                for s in live.drain(..) {
+                    if let Err(e) = rt.block_on(s._session.close()) {
+                        tracing::warn!("portal session close: {e}");
+                    }
+                }
+                let _ = reply.send(());
             }
         }
     }

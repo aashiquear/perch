@@ -143,6 +143,11 @@ pub trait CaptureBackend: Send {
     fn source_screen_rect(&self, _source: &Source) -> Option<(f32, f32, f32, f32)> {
         None
     }
+    /// Close platform sessions cleanly before exit. Portals persist the
+    /// restore selection only when the session is closed, so a daemon that
+    /// is killed without this asks again next start.
+    fn close(&mut self) {}
+
     /// Extent of the whole desktop (all outputs) in logical pixels.
     fn screen_bounds(&self) -> Option<(f32, f32)> {
         None

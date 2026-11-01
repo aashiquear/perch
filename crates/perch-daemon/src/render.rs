@@ -419,6 +419,11 @@ impl ApplicationHandler for RenderApp {
                     w.request_redraw();
                 }
             }
+            // While Perch owns the physical devices the spatial pointer is
+            // driven by evdev only; the OS pointer our own injection moves
+            // must not echo back into it through the compositor.
+            WindowEvent::CursorMoved { .. } | WindowEvent::CursorLeft { .. } | WindowEvent::MouseInput { .. }
+                if self.interact.grabbed() => {}
             WindowEvent::CursorMoved { position, .. } => {
                 if let Some(ctx) = self.ctx.clone() {
                     let mut e = self.engine.blocking_lock();

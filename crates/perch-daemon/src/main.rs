@@ -185,14 +185,16 @@ fn main() -> anyhow::Result<()> {
         let tracker = Arc::clone(&dev.tracker);
         let cfg2 = cfg.clone();
         let backend2 = Arc::clone(&backend);
+        let backend3 = Arc::clone(&backend);
         std::thread::spawn(move || {
-            if let Err(e) = rt.block_on(server::run(cfg2, eng2, dev, local_sink, backend2, ui_rx)) {
+            if let Err(e) = rt.block_on(server::run(cfg2, eng2, dev, local_sink, Arc::clone(&backend2), ui_rx)) {
                 tracing::error!("server: {e}");
             }
+            capture::close(&backend2);
             std::process::exit(0);
         });
         let host = cfg.name.clone();
-        return render::RenderApp::new(
+        let res = render::RenderApp::new(
             engine,
             tracker,
             cfg.display.monitor_name.clone(),
@@ -211,9 +213,13 @@ fn main() -> anyhow::Result<()> {
         )
         .with_host(host)
         .run();
+        capture::close(&backend3);
+        return res;
     }
 
     drop(ui_tx);
     drop(grab);
-    rt.block_on(server::run(cfg, engine, dev, local_sink, backend, ui_rx))
+    let res = rt.block_on(server::run(cfg, engine, dev, local_sink, Arc::clone(&backend), ui_rx));
+    capture::close(&backend);
+    res
 }

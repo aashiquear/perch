@@ -36,3 +36,12 @@ pub fn init(peer: Uuid) -> SharedBackend {
     };
     Arc::new(Mutex::new(b))
 }
+
+/// Close the capture backend's sessions before exit (see `CaptureBackend::close`).
+pub fn close(backend: &SharedBackend) {
+    if let Ok(mut b) = backend.lock() {
+        if let Some(b) = b.as_mut() {
+            b.close();
+        }
+    }
+}
