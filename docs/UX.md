@@ -168,3 +168,18 @@ laptop → display without crossing the glasses' own output. The window is then 
 and no desktop background shows; GNOME's `maximize` action is unbound by
 default, so Perch binds it to Ctrl+Super+Alt+F11 the first time (only if it
 was empty).
+
+### The control panel (laptop window)
+
+A dashboard: the connected glasses (with Rokid's product picture for the
+Max), mode chip (GLASSES / LAPTOP), stat tiles (windows, rows used, distance,
+fps, peers), a map of where the windows sit (yaw/pitch → x/y, focused one
+highlighted), then big icon buttons mirroring the bar and hotkeys:
+To glasses (full / half width), Glasses mode, All to laptop, Recenter,
+Centre grid here, Arrange (with presets: 1×1, 3 equal, wide centre, wide
+left, wide right, 2×2 — rows + per-window widths in list order), Calibrate.
+"To glasses" from the panel arms a move and fires when you click the app
+window (clicking the button itself focuses the panel, so moving "the focused
+window" immediately would move the panel). Per window: Focus, To laptop,
+Close app, display size, width, pin. Brightness cannot be set: the Rokid Max
+driver (`ar-drivers`) only reports it; use the rocker on the right temple.

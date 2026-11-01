@@ -1,15 +1,18 @@
 //! The Perch control panel: a normal desktop window (feature `render`) on
-//! the main display, drawn with egui, that is the home for everything you
-//! would otherwise need the CLI for — picking windows, the layout grid,
-//! focus/remove/span per window, calibration, input grab, sharing status and
-//! quitting. It sends the same commands the CLI and phones send, so nothing
-//! here bypasses the engine.
+//! the main display, drawn with egui. It is a dashboard — the connected
+//! glasses, live stats, a map of the layout — plus big icon buttons for
+//! everything the glasses bar and the hotkeys do, so nothing needs the CLI.
+//! It sends the same commands the CLI and phones send, so nothing here
+//! bypasses the engine.
 
 use crate::capture::UiMsg;
 use egui_wgpu::ScreenDescriptor;
 use perch_proto::{Command, Grid, State, WindowId};
+use perch_ui::icons::{self, Icon, ICON};
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
 use winit::event::WindowEvent;
 use winit::event_loop::ActiveEventLoop;
@@ -27,6 +30,27 @@ pub struct PanelSnapshot {
     pub host: String,
 }
 
+/// Product shot of the glasses we know, shown in the header once detected.
+/// Rokid Max: Rokid's own product image (au.rokid.com), used only to
+/// identify the connected device.
+const ROKID_MAX_PNG: &[u8] = include_bytes!("../../../assets/glasses/rokid-max.png");
+
+/// Full-size glasses display.
+const FULL: (u32, u32) = (1920, 1080);
+/// Half-width glasses display.
+const HALF: (u32, u32) = (960, 1080);
+
+/// Layout presets for the "Arrange" menu. Spans are in layout blocks
+/// (`grid.block_w_m`, 0.6 m by default): 1 = narrow, 2 = normal, 3 = wide.
+const PRESETS: &[(&str, u32, &[u32])] = &[
+    ("1 × 1", 1, &[3]),
+    ("3 equal", 1, &[2, 2, 2]),
+    ("wide centre", 1, &[1, 3, 1]),
+    ("wide left", 1, &[3, 1, 1]),
+    ("wide right", 1, &[1, 1, 3]),
+    ("2 × 2", 2, &[2, 2, 2, 2]),
+];
+
 /// The panel window and its GPU state.
 pub struct ControlPanel {
     window: Arc<Window>,
@@ -41,6 +65,13 @@ pub struct ControlPanel {
     grab: Arc<AtomicBool>,
     /// Grid being edited with the sliders (applied when a drag ends).
     grid_edit: Option<Grid>,
+    icons: HashMap<Icon, egui::TextureHandle>,
+    glasses_img: Option<egui::TextureHandle>,
+    /// "To glasses" clicked: fires once the panel loses focus to the app
+    /// the user clicks (clicking the button itself focused the panel).
+    pending_move: Option<(u32, u32)>,
+    move_fire_at: Option<Instant>,
+    arrange_open: bool,
     /// Quit was requested.
     pub quit: bool,
 }
@@ -55,8 +86,8 @@ impl ControlPanel {
     ) -> anyhow::Result<Self> {
         let attrs = Window::default_attributes()
             .with_title("Perch")
-            .with_inner_size(winit::dpi::LogicalSize::new(440.0, 720.0))
-            .with_min_inner_size(winit::dpi::LogicalSize::new(360.0, 480.0));
+            .with_inner_size(winit::dpi::LogicalSize::new(600.0, 860.0))
+            .with_min_inner_size(winit::dpi::LogicalSize::new(480.0, 600.0));
         let window = Arc::new(el.create_window(attrs)?);
         let instance = wgpu::Instance::default();
         let surface = instance.create_surface(Arc::clone(&window))?;
@@ -97,6 +128,22 @@ impl ControlPanel {
             None,
         );
         let renderer = egui_wgpu::Renderer::new(&device, format, None, 1, false);
+        let icons = all_icons()
+            .into_iter()
+            .map(|icon| {
+                (
+                    icon,
+                    ctx.load_texture(format!("icon-{icon:?}"), icon_image(icon), egui::TextureOptions::LINEAR),
+                )
+            })
+            .collect();
+        let glasses_img = match decode_png(ROKID_MAX_PNG) {
+            Ok(img) => Some(ctx.load_texture("glasses-rokid-max", img, egui::TextureOptions::LINEAR)),
+            Err(e) => {
+                tracing::warn!("glasses image: {e}");
+                None
+            }
+        };
         Ok(Self {
             window,
             egui_state,
@@ -109,6 +156,11 @@ impl ControlPanel {
             commands,
             grab,
             grid_edit: None,
+            icons,
+            glasses_img,
+            pending_move: None,
+            move_fire_at: None,
+            arrange_open: false,
             quit: false,
         })
     }
@@ -134,6 +186,11 @@ impl ControlPanel {
             }
             WindowEvent::CloseRequested => self.quit = true,
             WindowEvent::RedrawRequested => return true,
+            // The user clicked the app they want on the glasses: it has
+            // focus now, so the move can go ahead.
+            WindowEvent::Focused(false) if self.pending_move.is_some() => {
+                self.move_fire_at = Some(Instant::now() + Duration::from_millis(300));
+            }
             _ => {}
         }
         let _ = self.egui_state.on_window_event(&self.window, event);
@@ -146,14 +203,30 @@ impl ControlPanel {
 
     /// Run the UI and present one frame.
     pub fn draw(&mut self, snap: &PanelSnapshot) {
+        if let (Some(size), Some(at)) = (self.pending_move, self.move_fire_at) {
+            if Instant::now() >= at {
+                self.pending_move = None;
+                self.move_fire_at = None;
+                self.send(Command::MoveToGlasses {
+                    width: size.0,
+                    height: size.1,
+                });
+            }
+        }
         let raw = self.egui_state.take_egui_input(&self.window);
         let mut to_send: Vec<Command> = Vec::new();
         let mut grab_toggle = false;
         let mut quit = false;
         let egui_ctx = self.ctx.clone();
         let out = egui_ctx.run(raw, |ctx| {
+            if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
+                self.pending_move = None;
+                self.move_fire_at = None;
+            }
             egui::CentralPanel::default().show(ctx, |ui| {
-                self.ui(ui, snap, &mut to_send, &mut grab_toggle, &mut quit);
+                egui::ScrollArea::vertical().show(ui, |ui| {
+                    self.ui(ui, snap, &mut to_send, &mut grab_toggle, &mut quit);
+                });
             });
         });
         for cmd in to_send {
@@ -218,6 +291,21 @@ impl ControlPanel {
         frame.present();
     }
 
+    fn icon(&self, icon: Icon, size: f32) -> egui::Image<'_> {
+        let tex = &self.icons[&icon];
+        egui::Image::new((tex.id(), egui::vec2(size, size)))
+    }
+
+    /// A big icon + label button filling half the row.
+    fn big_button(&self, ui: &mut egui::Ui, icon: Icon, label: &str, hint: &str, selected: bool) -> bool {
+        let w = (ui.available_width() - 8.0) / 2.0;
+        let text = egui::RichText::new(label).size(15.0);
+        let btn = egui::Button::image_and_text(self.icon(icon, 28.0), text)
+            .min_size(egui::vec2(w, 54.0))
+            .selected(selected);
+        ui.add(btn).on_hover_text(hint).clicked()
+    }
+
     fn ui(
         &mut self,
         ui: &mut egui::Ui,
@@ -227,55 +315,167 @@ impl ControlPanel {
         quit: &mut bool,
     ) {
         let s = &snap.state;
+        let grabbed = self.grab.load(Ordering::Relaxed);
+
+        // ---- header: glasses picture, name, mode -------------------------
         ui.horizontal(|ui| {
-            ui.heading("Perch");
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if ui.button("Quit").clicked() {
+            if let (Some(tex), Some(name)) = (&self.glasses_img, s.glasses.as_deref()) {
+                if name.to_ascii_lowercase().contains("rokid") {
+                    let sz = tex.size_vec2();
+                    let h = 96.0;
+                    ui.add(egui::Image::new((tex.id(), egui::vec2(sz.x / sz.y * h, h))));
+                }
+            }
+            ui.vertical(|ui| {
+                ui.heading(egui::RichText::new("Perch").size(26.0));
+                match s.glasses.as_deref() {
+                    Some(g) => {
+                        ui.label(egui::RichText::new(g).size(16.0).strong());
+                        ui.label(
+                            egui::RichText::new(format!(
+                                "{}  ·  {}",
+                                s.display_mode
+                                    .map(|m| format!("{m:?}"))
+                                    .unwrap_or_else(|| "mode ?".into()),
+                                match s.calibration {
+                                    perch_proto::CalibrationState::Ready => "calibrated".to_string(),
+                                    perch_proto::CalibrationState::Calibrating { percent } =>
+                                        format!("calibrating {percent}%"),
+                                    perch_proto::CalibrationState::Uncalibrated => "not calibrated".to_string(),
+                                }
+                            ))
+                            .weak(),
+                        );
+                    }
+                    None => {
+                        ui.label(egui::RichText::new("No glasses connected").color(egui::Color32::LIGHT_RED));
+                    }
+                }
+                let (txt, col) = if grabbed {
+                    (
+                        "● GLASSES MODE — mouse & keys go to the glasses",
+                        egui::Color32::from_rgb(90, 220, 140),
+                    )
+                } else {
+                    (
+                        "○ LAPTOP MODE — glasses only display",
+                        egui::Color32::from_rgb(230, 190, 80),
+                    )
+                };
+                ui.label(egui::RichText::new(txt).color(col).strong());
+            });
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
+                if ui
+                    .button("Quit")
+                    .on_hover_text("Stop Perch; apps return to the laptop")
+                    .clicked()
+                {
                     *quit = true;
                 }
             });
         });
-        ui.label(format!(
-            "{}  ·  {}  ·  {:?}  ·  {:.0} fps",
-            s.glasses.as_deref().unwrap_or("no glasses"),
-            match s.calibration {
-                perch_proto::CalibrationState::Ready => "calibrated".to_string(),
-                perch_proto::CalibrationState::Calibrating { percent } => format!("calibrating {percent}%"),
-                perch_proto::CalibrationState::Uncalibrated => "uncalibrated".to_string(),
-            },
-            s.display_mode.unwrap_or(perch_proto::DisplayMode::Mono),
-            snap.fps
-        ));
-        ui.separator();
+        if self.pending_move.is_some() {
+            ui.colored_label(
+                egui::Color32::from_rgb(255, 210, 90),
+                "➜  Now click the window you want on the glasses (Esc cancels)",
+            );
+        }
+        ui.add_space(6.0);
 
-        ui.horizontal_wrapped(|ui| {
-            if ui
-                .button("To glasses (Ctrl+Alt+G)")
-                .on_hover_text("Moves the laptop's focused window to a full 1920×1080 glasses display. Prefer the hotkey from inside the app: this button moves whatever is focused.")
-                .clicked()
-            {
-                out.push(Command::MoveToGlasses {
-                    width: 1920,
-                    height: 1080,
-                });
+        // ---- stat tiles ----------------------------------------------------
+        let rows_used = {
+            let mut rows: Vec<i32> = s
+                .windows
+                .iter()
+                .map(|w| ((w.placement.pitch - s.grid.center_pitch) * 100.0).round() as i32)
+                .collect();
+            rows.sort_unstable();
+            rows.dedup();
+            rows.len()
+        };
+        ui.horizontal(|ui| {
+            stat(ui, &s.windows.len().to_string(), "windows");
+            stat(
+                ui,
+                &format!(
+                    "{} / {}",
+                    rows_used.max(usize::from(!s.windows.is_empty())),
+                    s.grid.rows
+                ),
+                "rows used",
+            );
+            stat(ui, &format!("{:.1} m", s.grid.distance), "distance");
+            stat(ui, &format!("{:.0}", snap.fps), "fps");
+            stat(ui, &s.peers.len().to_string(), "peers");
+        });
+        ui.add_space(6.0);
+
+        // ---- layout map ----------------------------------------------------
+        layout_map(ui, s);
+        ui.add_space(6.0);
+
+        // ---- actions ---------------------------------------------------------
+        ui.horizontal(|ui| {
+            if self.big_button(
+                ui,
+                Icon::Pick,
+                "To glasses",
+                "Then click the app window to move. Hotkey: Ctrl+Alt+G in the app.",
+                self.pending_move == Some(FULL),
+            ) {
+                self.pending_move = Some(FULL);
+                self.move_fire_at = None;
             }
-            if ui
-                .button("To glasses, half width (Ctrl+Alt+H)")
-                .on_hover_text("Same, onto a 960×1080 display for narrow apps")
-                .clicked()
-            {
-                out.push(Command::MoveToGlasses {
-                    width: 960,
-                    height: 1080,
-                });
+            if self.big_button(
+                ui,
+                Icon::Resize,
+                "To glasses · half width",
+                "Then click the app window to move; 960×1080 display. Hotkey: Ctrl+Alt+H.",
+                self.pending_move == Some(HALF),
+            ) {
+                self.pending_move = Some(HALF);
+                self.move_fire_at = None;
             }
-            if ui.button("Arrange").clicked() {
-                out.push(Command::ArrangeGrid);
+        });
+        ui.horizontal(|ui| {
+            if self.big_button(
+                ui,
+                Icon::Grab,
+                if grabbed { "Back to laptop mode" } else { "Glasses mode" },
+                "Mouse & keyboard go to the glasses while on. Hotkey: Ctrl+Alt+P.",
+                grabbed,
+            ) {
+                *grab_toggle = true;
             }
-            if ui.button("Recenter").clicked() {
+            if self.big_button(
+                ui,
+                Icon::ToLaptop,
+                "All to laptop",
+                "Remove every window; apps return to the laptop",
+                false,
+            ) {
+                for w in &s.windows {
+                    out.push(Command::RemoveWindow { id: w.id });
+                }
+            }
+        });
+        ui.horizontal(|ui| {
+            if self.big_button(
+                ui,
+                Icon::Recenter,
+                "Recenter",
+                "Current gaze becomes straight ahead",
+                false,
+            ) {
                 out.push(Command::Recenter);
             }
-            if ui.button("Centre here").clicked() {
+            if self.big_button(
+                ui,
+                Icon::CentreHere,
+                "Centre grid here",
+                "Put the grid where you are looking",
+                false,
+            ) {
                 out.push(Command::SetGrid {
                     grid: Grid {
                         center_yaw: snap.gaze.0,
@@ -284,26 +484,132 @@ impl ControlPanel {
                     },
                 });
             }
-            if ui.button("Calibrate (30 s)").clicked() {
+        });
+        ui.horizontal(|ui| {
+            if self.big_button(
+                ui,
+                Icon::Arrange,
+                if self.arrange_open {
+                    "Arrange ▴"
+                } else {
+                    "Arrange ▾"
+                },
+                "Re-flow the grid, or pick a preset",
+                self.arrange_open,
+            ) {
+                self.arrange_open = !self.arrange_open;
+            }
+            if self.big_button(
+                ui,
+                Icon::Calibrate,
+                "Calibrate (30 s)",
+                "Glasses still on a table",
+                false,
+            ) {
                 out.push(Command::Calibrate { seconds: 30 });
             }
-            if ui.button("All to laptop").on_hover_text("Remove every window; apps return to the laptop").clicked() {
-                for w in &s.windows {
-                    out.push(Command::RemoveWindow { id: w.id });
-                }
-            }
         });
-        let grabbed = self.grab.load(Ordering::Relaxed);
-        let mut g = grabbed;
-        if ui
-            .checkbox(&mut g, "Glasses mode: mouse & keyboard go to the glasses (Ctrl+Alt+P)")
-            .changed()
-        {
-            *grab_toggle = true;
+        if self.arrange_open {
+            ui.horizontal_wrapped(|ui| {
+                if ui.button("re-flow").on_hover_text("Keep sizes, pack rows").clicked() {
+                    out.push(Command::ArrangeGrid);
+                }
+                for (name, rows, spans) in PRESETS {
+                    if ui.button(*name).clicked() {
+                        out.extend(preset_commands(s, *rows, spans));
+                    }
+                }
+            });
+            ui.label(
+                egui::RichText::new(
+                    "Presets set rows and per-window widths (narrow / normal / wide blocks) in list order.",
+                )
+                .small()
+                .weak(),
+            );
+        }
+        ui.add_space(4.0);
+        ui.label(
+            egui::RichText::new(
+                "Brightness: use the rocker on the glasses' right temple. The Rokid Max driver exposes no brightness control yet.",
+            )
+            .small()
+            .weak(),
+        );
+        ui.separator();
+
+        // ---- windows -----------------------------------------------------------
+        ui.label(
+            egui::RichText::new(format!("Windows ({})", s.windows.len()))
+                .size(16.0)
+                .strong(),
+        );
+        if s.windows.is_empty() {
+            ui.label(egui::RichText::new("None yet. Focus an app and press Ctrl+Alt+G.").weak());
+        }
+        for (i, w) in s.windows.iter().enumerate() {
+            let focused = s.focused == Some(w.id);
+            egui::Frame::group(ui.style())
+                .fill(if focused {
+                    egui::Color32::from_rgb(30, 42, 52)
+                } else {
+                    egui::Color32::from_rgb(24, 26, 32)
+                })
+                .show(ui, |ui| {
+                    ui.horizontal(|ui| {
+                        let name = format!("{}  {}", i + 1, source_name(&w.source));
+                        ui.label(if focused {
+                            egui::RichText::new(format!("● {name}")).strong()
+                        } else {
+                            egui::RichText::new(format!("○ {name}"))
+                        });
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            if ui
+                                .button("✕ Close app")
+                                .on_hover_text("Close the application, then remove the window")
+                                .clicked()
+                            {
+                                out.push(Command::CloseAppWindow { id: w.id });
+                            }
+                            if ui
+                                .button("⇦ To laptop")
+                                .on_hover_text("Remove the window; the app returns to the laptop")
+                                .clicked()
+                            {
+                                out.push(Command::RemoveWindow { id: w.id });
+                            }
+                            if !focused && ui.button("Focus").clicked() {
+                                out.push(Command::Focus { id: w.id });
+                            }
+                        });
+                    });
+                    ui.horizontal(|ui| {
+                        size_combo(ui, w.id, out);
+                        span_combo(ui, w.id, out);
+                        if ui
+                            .small_button("Pin here")
+                            .on_hover_text("Pin where I'm looking")
+                            .clicked()
+                        {
+                            out.push(Command::PinHere { id: w.id });
+                        }
+                        ui.label(
+                            egui::RichText::new(format!(
+                                "yaw {:.0}°  pitch {:.0}°  {:.2}×{:.2} m",
+                                w.placement.yaw.to_degrees(),
+                                w.placement.pitch.to_degrees(),
+                                w.placement.width_m,
+                                w.placement.height_m,
+                            ))
+                            .small()
+                            .weak(),
+                        );
+                    });
+                });
         }
         ui.separator();
 
-        ui.collapsing("Layout grid", |ui| {
+        ui.collapsing("Layout grid (fine tuning)", |ui| {
             let grid = self.grid_edit.get_or_insert(s.grid);
             let mut changed = false;
             changed |= ui
@@ -332,64 +638,9 @@ impl ControlPanel {
                 out.push(Command::SetGrid { grid: *grid });
             }
         });
-        // Keep the sliders in sync with changes made elsewhere when idle.
         if !ui.ctx().is_using_pointer() {
             self.grid_edit = Some(s.grid);
         }
-        ui.separator();
-
-        ui.label(format!("Windows ({})", s.windows.len()));
-        egui::ScrollArea::vertical().max_height(300.0).show(ui, |ui| {
-            for w in &s.windows {
-                let focused = s.focused == Some(w.id);
-                ui.horizontal(|ui| {
-                    let name = source_name(&w.source);
-                    let text = if focused {
-                        egui::RichText::new(format!("● {name}")).strong()
-                    } else {
-                        egui::RichText::new(format!("○ {name}"))
-                    };
-                    ui.label(text);
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if ui
-                            .small_button("Close app")
-                            .on_hover_text("Close the application, then remove the window")
-                            .clicked()
-                        {
-                            out.push(Command::CloseAppWindow { id: w.id });
-                        }
-                        if ui
-                            .small_button("To laptop")
-                            .on_hover_text("Remove the window; the app returns to the laptop")
-                            .clicked()
-                        {
-                            out.push(Command::RemoveWindow { id: w.id });
-                        }
-                        size_combo(ui, w.id, out);
-                        if ui.small_button("Pin").on_hover_text("Pin where I'm looking").clicked() {
-                            out.push(Command::PinHere { id: w.id });
-                        }
-                        if !focused && ui.small_button("Focus").clicked() {
-                            out.push(Command::Focus { id: w.id });
-                        }
-                        span_combo(ui, w.id, out);
-                    });
-                });
-                ui.label(
-                    egui::RichText::new(format!(
-                        "   yaw {:.0}°  pitch {:.0}°  {:.2}×{:.2} m  {:?}",
-                        w.placement.yaw.to_degrees(),
-                        w.placement.pitch.to_degrees(),
-                        w.placement.width_m,
-                        w.placement.height_m,
-                        w.anchor
-                    ))
-                    .small()
-                    .weak(),
-                );
-            }
-        });
-        ui.separator();
 
         ui.collapsing("Sharing", |ui| {
             ui.label(format!("This host: {}  (control :7420, stream :7421)", snap.host));
@@ -404,6 +655,144 @@ impl ControlPanel {
             );
         });
     }
+}
+
+/// One stat tile: big number, small caption.
+fn stat(ui: &mut egui::Ui, value: &str, caption: &str) {
+    egui::Frame::group(ui.style())
+        .fill(egui::Color32::from_rgb(24, 26, 32))
+        .inner_margin(egui::Margin::symmetric(10, 6))
+        .show(ui, |ui| {
+            ui.vertical_centered(|ui| {
+                ui.label(egui::RichText::new(value).size(20.0).strong());
+                ui.label(egui::RichText::new(caption).small().weak());
+            });
+        });
+}
+
+/// Top-down-ish map of the spatial windows: yaw → x, pitch → y, angular
+/// size → box size. The focused window is highlighted.
+fn layout_map(ui: &mut egui::Ui, s: &State) {
+    let width = ui.available_width();
+    let height = 150.0;
+    let (resp, p) = ui.allocate_painter(egui::vec2(width, height), egui::Sense::hover());
+    let r = resp.rect;
+    p.rect_filled(r, 6.0, egui::Color32::from_rgb(18, 20, 26));
+    // 110° of yaw across the width; same scale vertically.
+    let k = width / 110f32.to_radians();
+    let (cx, cy) = (r.center().x, r.center().y);
+    let (cyaw, cpitch) = (s.grid.center_yaw, s.grid.center_pitch);
+    // Centre cross.
+    p.line_segment(
+        [egui::pos2(cx, r.top() + 4.0), egui::pos2(cx, r.bottom() - 4.0)],
+        egui::Stroke::new(1.0_f32, egui::Color32::from_gray(45)),
+    );
+    p.line_segment(
+        [egui::pos2(r.left() + 4.0, cy), egui::pos2(r.right() - 4.0, cy)],
+        egui::Stroke::new(1.0_f32, egui::Color32::from_gray(45)),
+    );
+    for (i, w) in s.windows.iter().enumerate() {
+        let d = w.placement.distance.max(0.1);
+        let aw = 2.0 * (w.placement.width_m / 2.0 / d).atan();
+        let ah = 2.0 * (w.placement.height_m / 2.0 / d).atan();
+        let x = cx - (w.placement.yaw - cyaw) * k;
+        let y = cy - (w.placement.pitch - cpitch) * k;
+        let rect = egui::Rect::from_center_size(egui::pos2(x, y), egui::vec2(aw * k, ah * k));
+        let rect = rect.intersect(r.shrink(2.0));
+        let focused = s.focused == Some(w.id);
+        let fill = if focused {
+            egui::Color32::from_rgb(70, 140, 200)
+        } else {
+            egui::Color32::from_rgb(60, 70, 90)
+        };
+        p.rect_filled(rect.expand(1.0), 3.0, egui::Color32::from_gray(140));
+        p.rect_filled(rect, 3.0, fill);
+        p.text(
+            rect.center(),
+            egui::Align2::CENTER_CENTER,
+            (i + 1).to_string(),
+            egui::FontId::proportional(14.0),
+            egui::Color32::WHITE,
+        );
+    }
+    if s.windows.is_empty() {
+        p.text(
+            egui::pos2(cx, cy),
+            egui::Align2::CENTER_CENTER,
+            "no windows on the glasses",
+            egui::FontId::proportional(13.0),
+            egui::Color32::from_gray(110),
+        );
+    }
+}
+
+/// Commands that apply a preset: rows, then width + slot per window in
+/// list order; windows beyond the preset keep flowing automatically.
+fn preset_commands(s: &State, rows: u32, spans: &[u32]) -> Vec<Command> {
+    let mut out = vec![Command::SetGrid {
+        grid: Grid { rows, ..s.grid },
+    }];
+    let per_row = spans.len().div_ceil(rows as usize).max(1);
+    for (i, w) in s.windows.iter().enumerate() {
+        let span = spans.get(i).copied().unwrap_or(0);
+        out.push(Command::SetWindowSpan { id: w.id, span });
+        out.push(Command::SlotWindow {
+            id: w.id,
+            row: ((i / per_row) as u32).min(rows - 1),
+            index: (i % per_row) as u32,
+        });
+    }
+    out
+}
+
+fn all_icons() -> Vec<Icon> {
+    vec![
+        Icon::Recenter,
+        Icon::CentreHere,
+        Icon::Arrange,
+        Icon::RowsMinus,
+        Icon::RowsPlus,
+        Icon::Nearer,
+        Icon::Farther,
+        Icon::Pick,
+        Icon::Calibrate,
+        Icon::Clear,
+        Icon::Grab,
+        Icon::ToLaptop,
+        Icon::CloseApp,
+        Icon::Resize,
+    ]
+}
+
+/// Rasterise a bar icon at 2× (48 px) for the panel buttons.
+fn icon_image(icon: Icon) -> egui::ColorImage {
+    let m = icons::mask(icon);
+    let n = ICON * 2;
+    let mut img = egui::ColorImage::new([n, n], egui::Color32::TRANSPARENT);
+    for y in 0..n {
+        for x in 0..n {
+            let a = m[y / 2][x / 2];
+            if a > 0 {
+                img.pixels[y * n + x] = egui::Color32::from_rgba_unmultiplied(235, 238, 245, a);
+            }
+        }
+    }
+    img
+}
+
+fn decode_png(bytes: &[u8]) -> anyhow::Result<egui::ColorImage> {
+    let mut decoder = png::Decoder::new(std::io::Cursor::new(bytes));
+    decoder.set_transformations(png::Transformations::normalize_to_color8() | png::Transformations::ALPHA);
+    let mut reader = decoder.read_info()?;
+    let mut buf = vec![0u8; reader.output_buffer_size()];
+    let info = reader.next_frame(&mut buf)?;
+    anyhow::ensure!(
+        info.color_type == png::ColorType::Rgba,
+        "expected RGBA png, got {:?}",
+        info.color_type
+    );
+    let (w, h) = (info.width as usize, info.height as usize);
+    Ok(egui::ColorImage::from_rgba_unmultiplied([w, h], &buf[..w * h * 4]))
 }
 
 fn size_combo(ui: &mut egui::Ui, id: WindowId, out: &mut Vec<Command>) {
@@ -430,14 +819,14 @@ fn size_combo(ui: &mut egui::Ui, id: WindowId, out: &mut Vec<Command>) {
 fn span_combo(ui: &mut egui::Ui, id: WindowId, out: &mut Vec<Command>) {
     let mut span: u32 = 0;
     egui::ComboBox::from_id_salt(("span", id))
-        .selected_text("span")
+        .selected_text("width")
         .width(70.0)
         .show_ui(ui, |ui| {
             for (v, label) in [
                 (0, "auto"),
-                (1, "1 block"),
-                (2, "2 blocks"),
-                (3, "3 blocks"),
+                (1, "narrow (1 block)"),
+                (2, "normal (2 blocks)"),
+                (3, "wide (3 blocks)"),
                 (4, "4 blocks"),
             ] {
                 if ui.selectable_value(&mut span, v, label).clicked() {
@@ -450,7 +839,7 @@ fn span_combo(ui: &mut egui::Ui, id: WindowId, out: &mut Vec<Command>) {
 fn source_name(s: &perch_proto::Source) -> String {
     use perch_proto::Source::*;
     match s {
-        Display { display_index, .. } => format!("Monitor {display_index}"),
+        Display { display_index, .. } => format!("Glasses display {}", display_index + 1),
         Window { title, .. } if !title.is_empty() => title.clone(),
         Window { handle, .. } => format!("Window {handle}"),
         Virtual { width, height, .. } => format!("Demo {width}×{height}"),

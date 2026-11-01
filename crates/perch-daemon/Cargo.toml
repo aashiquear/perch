@@ -15,7 +15,7 @@ default = []
 # Real Rokid hardware.
 rokid = ["perch-hal/rokid"]
 # Open a window on the glasses and draw (needs a GPU + display server).
-render = ["dep:perch-compositor", "dep:winit", "dep:egui", "dep:egui-wgpu", "dep:egui-winit", "dep:wgpu", "dep:pollster"]
+render = ["dep:perch-compositor", "dep:winit", "dep:egui", "dep:egui-wgpu", "dep:egui-winit", "dep:wgpu", "dep:pollster", "dep:png"]
 # Linux screen/window capture via xdg-desktop-portal + PipeWire (needs libpipewire-0.3-dev).
 linux-pipewire = ["perch-capture/linux-pipewire"]
 # Linux keyboard/mouse injection + capture.
@@ -50,3 +50,4 @@ egui-winit = { version = "0.31", optional = true, default-features = false, feat
 wgpu = { workspace = true, optional = true }
 chrono = "0.4"
 pollster = { version = "0.4", optional = true }
+png = { version = "0.17", optional = true }

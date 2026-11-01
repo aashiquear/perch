@@ -5,7 +5,7 @@
 pub const ICON: usize = 24;
 
 /// Which icon.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Icon {
     /// Crosshair.
     Recenter,
