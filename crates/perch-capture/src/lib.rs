@@ -143,6 +143,15 @@ pub trait CaptureBackend: Send {
     fn source_screen_rect(&self, _source: &Source) -> Option<(f32, f32, f32, f32)> {
         None
     }
+    /// Deliver input to the application behind `source` through the capture
+    /// session itself (xdg RemoteDesktop portal on Linux: coordinates are
+    /// relative to the stream, so window captures get exact pointer
+    /// placement). Returns `false` when this backend cannot inject, in which
+    /// case the caller falls back to a system-wide input sink.
+    fn inject(&mut self, _source: &Source, _events: &[perch_proto::InputEvent]) -> bool {
+        false
+    }
+
     /// Close platform sessions cleanly before exit. Portals persist the
     /// restore selection only when the session is closed, so a daemon that
     /// is killed without this asks again next start.

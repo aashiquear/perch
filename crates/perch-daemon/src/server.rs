@@ -228,6 +228,16 @@ pub async fn run(
                         let source = engine.lock().await.ws.get(window).map(|w| w.source.clone());
                         let Some(source) = source else { continue };
                         if perch_input::source_peer(&source) == me {
+                            // The capture session can usually deliver input itself
+                            // (portal RemoteDesktop), with stream-relative placement.
+                            let handled = backend
+                                .try_lock()
+                                .ok()
+                                .and_then(|mut b| b.as_mut().map(|b| b.inject(&source, &events)))
+                                .unwrap_or(false);
+                            if handled {
+                                continue;
+                            }
                             if let Some(sink) = local_sink.as_mut() {
                                 let target = backend.try_lock().ok().and_then(|b| {
                                     let b = b.as_ref()?;

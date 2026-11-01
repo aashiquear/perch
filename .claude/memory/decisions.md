@@ -46,3 +46,4 @@
   usable through the glasses. Absolute pointer placement uses a separate uinput ABS device
   (0..65535 over the whole desktop, like a VM tablet); relative fallback when the target's
   screen rect is unknown (portal window streams).
+- 2026-11-01 Input into captured windows on GNOME Wayland goes through the xdg RemoteDesktop portal (stream-relative NotifyPointerMotionAbsolute), not uinput + window geometry: Mutter exposes no window positions to host apps, and the portal path is the supported one (gnome-remote-desktop uses the same Mutter API). uinput remains for sources without a portal session.

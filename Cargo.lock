@@ -2381,6 +2381,7 @@ name = "perch-capture"
 version = "0.1.0"
 dependencies = [
  "ashpd",
+ "perch-input",
  "perch-proto",
  "pipewire",
  "serde",

@@ -328,6 +328,32 @@ impl Engine {
     /// have a window are skipped (restore after restart), so this is
     /// idempotent. When real windows arrive, our own `Virtual` placeholders
     /// (preset demos) go away first.
+    /// Drop windows whose capture handles belong to a previous run. Portal
+    /// stream indices restart at zero every launch, so a saved `portal:1`
+    /// would silently show whatever stream 1 is now (a duplicate of another
+    /// window, or nothing). The restore re-adds the current selection.
+    pub fn prune_local_captures(&mut self) -> Vec<Effect> {
+        let me = self.me.peer_id;
+        let stale: Vec<WindowId> = self
+            .ws
+            .windows
+            .iter()
+            .filter(|w| match &w.source {
+                perch_proto::Source::Window { peer, handle, .. } => *peer == me && handle.starts_with("portal:"),
+                perch_proto::Source::Display { peer, .. } => *peer == me,
+                _ => false,
+            })
+            .map(|w| w.id)
+            .collect();
+        let mut fx = Vec::new();
+        for id in stale {
+            if self.ws.remove(id).is_ok() {
+                fx.push(Effect::Broadcast(Event::WindowRemoved { id }));
+            }
+        }
+        fx
+    }
+
     pub fn add_picked_windows(&mut self, picked: Vec<(perch_proto::Source, Option<(u32, u32)>)>) -> Vec<Effect> {
         self.pick_yaw = None;
         let mut fx = Vec::new();
@@ -530,6 +556,36 @@ mod tests {
         assert!(
             matches!(&fx[1], Effect::DeliverInput { peer, events } if *peer == phone && events == &vec![InputEvent::Text { ch: 'x' }])
         );
+    }
+
+    #[test]
+    fn prune_drops_only_this_runs_portal_captures() {
+        let mut e = Engine::new(me(), DisplayOptics::rokid_max_1080p(), None);
+        let mine = e.me.peer_id;
+        let other = Uuid::new_v4();
+        let win = |peer, handle: &str| Source::Window {
+            peer,
+            handle: handle.to_string(),
+            title: String::new(),
+        };
+        e.add_picked_windows(vec![
+            (win(mine, "portal:0"), None),
+            (win(other, "portal:0"), None),
+            (win(mine, "x11:42"), None),
+            (
+                Source::Display {
+                    peer: mine,
+                    display_index: 0,
+                },
+                None,
+            ),
+        ]);
+        assert_eq!(e.ws.windows.len(), 4);
+        let fx = e.prune_local_captures();
+        assert_eq!(fx.len(), 2, "local portal window + local display");
+        let left: Vec<&Source> = e.ws.windows.iter().map(|w| &w.source).collect();
+        assert!(left.contains(&&win(other, "portal:0")), "remote peer's window stays");
+        assert!(left.contains(&&win(mine, "x11:42")), "non-portal handle stays");
     }
 
     #[test]

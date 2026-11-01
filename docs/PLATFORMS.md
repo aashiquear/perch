@@ -33,7 +33,16 @@ window → one spatial window each. Virtual displays (for "extend"):
 GNOME Mutter `org.gnome.Mutter.ScreenCast.RecordVirtual`, wlroots
 `wlr-virtual-output`, fallback `evdi`.
 
-**Input:** `/dev/uinput` for injection (virtual "Perch Virtual Input"
+**Input into captured apps:** the capture session is an xdg **RemoteDesktop**
+portal session carrying the screen-cast sources, so pointer and keyboard events
+are sent through the portal in *stream coordinates*: a window capture gets exact
+pointer placement even though the portal never says where the window is.
+`CaptureBackend::inject` returns false where the RemoteDesktop portal is
+missing, and the daemon falls back to uinput below. Restore tokens for such
+sessions live in the portal's `remote-desktop` table, separate from
+screen-cast-only tokens.
+
+**Input (fallback / remote peers):** `/dev/uinput` for injection (virtual "Perch Virtual Input"
 keyboard+mouse), evdev grab for capture when routing to a remote peer. User in
 `input` group + `udev/70-perch-uinput.rules`. Panic key (default Scroll Lock)
 always returns input to local.

@@ -90,6 +90,16 @@ fn main() -> anyhow::Result<()> {
     )));
     let dev = device::spawn(cfg.clone(), Some(paths.clone()), source);
     let backend = capture::init(cfg.peer_id);
+    #[cfg(feature = "linux-pipewire")]
+    {
+        let n = engine.blocking_lock().prune_local_captures().len();
+        if n > 0 {
+            tracing::info!(
+                n,
+                "dropped captured windows from the previous run; restore re-adds them"
+            );
+        }
+    }
     // Commands and raw input from the on-glasses UI → engine loop.
     let (ui_tx, ui_rx) = tokio::sync::mpsc::unbounded_channel::<capture::UiMsg>();
     // Physical mouse/keyboard, grabbed from the OS while `grab` is set, feed

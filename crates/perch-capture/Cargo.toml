@@ -14,6 +14,7 @@ macos-sck = []
 
 [dependencies]
 perch-proto.workspace = true
+perch-input.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
 serde.workspace = true

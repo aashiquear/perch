@@ -25,10 +25,12 @@
 //! implemented yet.
 
 use super::{now_us, CaptureBackend, CaptureError, CaptureSource, Frame, PixelFormat};
+use ashpd::desktop::remote_desktop::{Axis, DeviceType, KeyState, RemoteDesktop};
 use ashpd::desktop::screencast::{CursorMode, Screencast, SourceType};
 use ashpd::desktop::PersistMode;
 use ashpd::desktop::Session;
 use perch_proto::Source;
+use perch_proto::{InputEvent, MouseButton};
 use std::io::Cursor;
 use std::os::fd::OwnedFd;
 use std::sync::{mpsc, Arc, Condvar, Mutex};
@@ -49,6 +51,10 @@ pub struct PickedStream {
     /// Portal's opaque per-source id, if it gives one; picking the same
     /// window twice then maps to the same [`Source`] instead of a duplicate.
     pub portal_id: Option<String>,
+    /// Index of the portal session (for input injection).
+    pub session_index: usize,
+    /// Whether that session is a remote-desktop session (can inject).
+    pub remote: bool,
     /// Logical desktop position (monitors only).
     pub position: Option<(i32, i32)>,
     /// The PipeWire connection of the portal session that owns this node.
@@ -63,6 +69,13 @@ enum PortalReq {
     },
     /// Close every live portal session (persists the restore selection).
     Close { reply: mpsc::Sender<()> },
+    /// Inject input through a remote-desktop session.
+    Inject {
+        session: usize,
+        node_id: u32,
+        size: (u32, u32),
+        events: Vec<InputEvent>,
+    },
 }
 
 /// One picked stream as the portal describes it.
@@ -97,12 +110,33 @@ struct PickResult {
     layout: Vec<LogicalMonitor>,
     restore_token: Option<String>,
     fd: OwnedFd,
+    /// Filled in by the portal thread once the session is stored.
+    session_index: usize,
+    remote: bool,
 }
 
 /// Keeps a portal session alive for as long as its streams are used.
-struct LiveSession {
-    _proxy: Screencast<'static>,
-    _session: Session<'static, Screencast<'static>>,
+enum LiveSession {
+    /// ScreenCast only (compositor without a RemoteDesktop portal).
+    Cast {
+        _proxy: Screencast<'static>,
+        session: Session<'static, Screencast<'static>>,
+    },
+    /// RemoteDesktop session with screen-cast sources: can inject input.
+    Remote {
+        _cast: Screencast<'static>,
+        proxy: RemoteDesktop<'static>,
+        session: Session<'static, RemoteDesktop<'static>>,
+    },
+}
+
+impl LiveSession {
+    async fn close(&self) -> Result<(), ashpd::Error> {
+        match self {
+            LiveSession::Cast { session, .. } => session.close().await,
+            LiveSession::Remote { session, .. } => session.close().await,
+        }
+    }
 }
 
 /// Portal-backed capture.
@@ -175,6 +209,8 @@ impl PortalBackend {
                 size,
                 kind,
                 portal_id,
+                session_index: res.session_index,
+                remote: res.remote,
                 position,
                 session: Arc::clone(&session),
             });
@@ -233,6 +269,22 @@ impl CaptureBackend for PortalBackend {
 
     fn restore_token(&self) -> Option<String> {
         self.restore_token.clone()
+    }
+
+    fn inject(&mut self, source: &Source, events: &[InputEvent]) -> bool {
+        let Some(s) = self.stream_for(source) else { return false };
+        if !s.remote {
+            return false;
+        }
+        let Some(size) = s.size else { return false };
+        self.req_tx
+            .send(PortalReq::Inject {
+                session: s.session_index,
+                node_id: s.node_id,
+                size,
+                events: events.to_vec(),
+            })
+            .is_ok()
     }
 
     fn close(&mut self) {
@@ -300,14 +352,26 @@ fn portal_thread(rx: mpsc::Receiver<PortalReq>) {
                 reply,
             } => {
                 let res = rt.block_on(pick(multiple, restore_token.as_deref()));
-                let _ = reply.send(res.map(|(r, session)| {
+                let _ = reply.send(res.map(|(mut r, session)| {
+                    r.session_index = live.len();
+                    r.remote = matches!(session, LiveSession::Remote { .. });
                     live.push(session);
                     r
                 }));
             }
+            PortalReq::Inject {
+                session,
+                node_id,
+                size,
+                events,
+            } => {
+                if let Some(LiveSession::Remote { proxy, session, .. }) = live.get(session) {
+                    rt.block_on(inject_events(proxy, session, node_id, size, &events));
+                }
+            }
             PortalReq::Close { reply } => {
                 for s in live.drain(..) {
-                    if let Err(e) = rt.block_on(s._session.close()) {
+                    if let Err(e) = rt.block_on(s.close()) {
                         tracing::warn!("portal session close: {e}");
                     }
                 }
@@ -325,30 +389,94 @@ fn portal_err(e: ashpd::Error) -> CaptureError {
 }
 
 async fn pick(multiple: bool, restore_token: Option<&str>) -> Result<(PickResult, LiveSession), CaptureError> {
-    let proxy = Screencast::new().await.map_err(portal_err)?;
-    let session = proxy.create_session().await.map_err(portal_err)?;
-    proxy
-        .select_sources(
-            &session,
-            CursorMode::Embedded,
-            SourceType::Monitor | SourceType::Window,
-            multiple,
-            restore_token,
-            PersistMode::ExplicitlyRevoked,
-        )
-        .await
-        .map_err(portal_err)?
-        .response()
-        .map_err(portal_err)?;
-    let streams = proxy
+    let cast = Screencast::new().await.map_err(portal_err)?;
+    let types = SourceType::Monitor | SourceType::Window;
+    // Prefer a RemoteDesktop session carrying the screen-cast sources: the
+    // portal then accepts pointer/keyboard events in stream coordinates, so
+    // window captures get exact placement without knowing where the window
+    // is on the desktop. Falls back to plain ScreenCast where unavailable.
+    match remote_session(multiple, restore_token, types).await {
+        Ok(ok) => return Ok(ok),
+        Err(e) => tracing::info!("remote-desktop portal unavailable ({e}); capture only"),
+    }
+    let session = cast.create_session().await.map_err(portal_err)?;
+    cast.select_sources(
+        &session,
+        CursorMode::Embedded,
+        types,
+        multiple,
+        restore_token,
+        PersistMode::ExplicitlyRevoked,
+    )
+    .await
+    .map_err(portal_err)?
+    .response()
+    .map_err(portal_err)?;
+    let streams = cast
         .start(&session, None)
         .await
         .map_err(portal_err)?
         .response()
         .map_err(portal_err)?;
-    let fd = proxy.open_pipe_wire_remote(&session).await.map_err(portal_err)?;
+    let fd = cast.open_pipe_wire_remote(&session).await.map_err(portal_err)?;
+    let result = pick_result(streams.streams(), streams.restore_token(), fd).await;
+    Ok((result, LiveSession::Cast { _proxy: cast, session }))
+}
+
+async fn remote_session(
+    multiple: bool,
+    restore_token: Option<&str>,
+    types: ashpd::enumflags2::BitFlags<SourceType>,
+) -> Result<(PickResult, LiveSession), CaptureError> {
+    let rd = RemoteDesktop::new().await.map_err(portal_err)?;
+    let cast = Screencast::new().await.map_err(portal_err)?;
+    let session = rd.create_session().await.map_err(portal_err)?;
+    rd.select_devices(
+        &session,
+        DeviceType::Keyboard | DeviceType::Pointer,
+        restore_token,
+        PersistMode::ExplicitlyRevoked,
+    )
+    .await
+    .map_err(portal_err)?
+    .response()
+    .map_err(portal_err)?;
+    // Persistence belongs to the remote-desktop side of the session; the
+    // portal rejects persist options on SelectSources here.
+    cast.select_sources(
+        &session,
+        CursorMode::Embedded,
+        types,
+        multiple,
+        None,
+        PersistMode::DoNot,
+    )
+    .await
+    .map_err(portal_err)?
+    .response()
+    .map_err(portal_err)?;
+    let devices = rd
+        .start(&session, None)
+        .await
+        .map_err(portal_err)?
+        .response()
+        .map_err(portal_err)?;
+    let fd = cast.open_pipe_wire_remote(&session).await.map_err(portal_err)?;
+    let streams = devices.streams().unwrap_or(&[]);
+    let result = pick_result(streams, devices.restore_token(), fd).await;
+    tracing::info!(devices = ?devices.devices(), "remote-desktop session: input goes through the portal");
+    Ok((
+        result,
+        LiveSession::Remote {
+            _cast: cast,
+            proxy: rd,
+            session,
+        },
+    ))
+}
+
+async fn pick_result(streams: &[ashpd::desktop::screencast::Stream], token: Option<&str>, fd: OwnedFd) -> PickResult {
     let picked = streams
-        .streams()
         .iter()
         .map(|s| RawStream {
             node_id: s.pipe_wire_node_id(),
@@ -365,18 +493,85 @@ async fn pick(multiple: bool, restore_token: Option<&str>) -> Result<(PickResult
             Vec::new()
         }
     };
-    Ok((
-        PickResult {
-            streams: picked,
-            layout,
-            restore_token: streams.restore_token().map(ToOwned::to_owned),
-            fd,
-        },
-        LiveSession {
-            _proxy: proxy,
-            _session: session,
-        },
-    ))
+    PickResult {
+        streams: picked,
+        layout,
+        restore_token: token.map(ToOwned::to_owned),
+        fd,
+        session_index: 0,
+        remote: false,
+    }
+}
+
+/// Translate Perch input events into RemoteDesktop portal notifications.
+async fn inject_events(
+    rd: &RemoteDesktop<'static>,
+    session: &Session<'static, RemoteDesktop<'static>>,
+    node_id: u32,
+    size: (u32, u32),
+    events: &[InputEvent],
+) {
+    for ev in events {
+        let res = match *ev {
+            InputEvent::MouseMoveAbs { x, y } => {
+                let px = (x.clamp(0.0, 1.0) * size.0 as f32) as f64;
+                let py = (y.clamp(0.0, 1.0) * size.1 as f32) as f64;
+                rd.notify_pointer_motion_absolute(session, node_id, px, py).await
+            }
+            InputEvent::MouseMove { dx, dy } => rd.notify_pointer_motion(session, dx as f64, dy as f64).await,
+            InputEvent::MouseButton { button, down } => {
+                let code = match button {
+                    MouseButton::Left => 0x110,
+                    MouseButton::Right => 0x111,
+                    MouseButton::Middle => 0x112,
+                    MouseButton::Back => 0x113,
+                    MouseButton::Forward => 0x114,
+                };
+                rd.notify_pointer_button(session, code, key_state(down)).await
+            }
+            InputEvent::Scroll { dx, dy } => {
+                // Perch: positive = up/left. Portal discrete steps: positive = down/right.
+                let mut r = Ok(());
+                if dy.round() != 0.0 {
+                    r = rd
+                        .notify_pointer_axis_discrete(session, Axis::Vertical, -(dy.round() as i32))
+                        .await;
+                }
+                if r.is_ok() && dx.round() != 0.0 {
+                    r = rd
+                        .notify_pointer_axis_discrete(session, Axis::Horizontal, -(dx.round() as i32))
+                        .await;
+                }
+                r
+            }
+            InputEvent::Key { usage, down, .. } => match perch_input::keymap::hid_to_evdev(usage) {
+                Some(code) => rd.notify_keyboard_keycode(session, code as i32, key_state(down)).await,
+                None => Ok(()),
+            },
+            InputEvent::Text { ch } => {
+                let sym = if (ch as u32) < 0x100 {
+                    ch as i32
+                } else {
+                    (0x0100_0000 | ch as u32) as i32
+                };
+                match rd.notify_keyboard_keysym(session, sym, KeyState::Pressed).await {
+                    Ok(()) => rd.notify_keyboard_keysym(session, sym, KeyState::Released).await,
+                    e => e,
+                }
+            }
+        };
+        if let Err(e) = res {
+            tracing::debug!("portal inject: {e}");
+        }
+    }
+}
+
+fn key_state(down: bool) -> KeyState {
+    if down {
+        KeyState::Pressed
+    } else {
+        KeyState::Released
+    }
 }
 
 /// GNOME's monitor layout via `org.gnome.Mutter.DisplayConfig.GetCurrentState`.
