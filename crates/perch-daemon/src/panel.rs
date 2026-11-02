@@ -125,7 +125,7 @@ impl ControlPanel {
         };
         surface.configure(&device, &config);
         let ctx = egui::Context::default();
-        ctx.set_visuals(egui::Visuals::dark());
+        apply_theme(&ctx);
         let egui_state = egui_winit::State::new(
             ctx.clone(),
             egui::ViewportId::ROOT,
@@ -314,8 +314,7 @@ impl ControlPanel {
                 .selected(selected);
             clicked = ui.add(btn).on_hover_text(hint).clicked();
             ui.vertical(|ui| {
-                ui.add_space(6.0);
-                ui.label(egui::RichText::new(label).size(15.0));
+                        ui.label(egui::RichText::new(label).size(15.0));
                 if !shortcut.is_empty() {
                     ui.label(egui::RichText::new(shortcut).small().weak());
                 }
@@ -335,6 +334,7 @@ impl ControlPanel {
         let s = &snap.state;
         let grabbed = self.grab.load(Ordering::Relaxed);
 
+        card(ui, false, |ui| {
         // ---- header: glasses picture, name, mode -------------------------
         ui.horizontal(|ui| {
             if let (Some(tex), Some(name)) = (&self.glasses_img, s.glasses.as_deref()) {
@@ -398,8 +398,8 @@ impl ControlPanel {
                 "➜  Now click the window you want on the glasses (Esc cancels)",
             );
         }
-        ui.add_space(6.0);
 
+        });
         // ---- stat tiles ----------------------------------------------------
         let rows_used = {
             let mut rows: Vec<i32> = s
@@ -426,12 +426,15 @@ impl ControlPanel {
             stat(ui, &format!("{:.0}", snap.fps), "fps");
             stat(ui, &s.peers.len().to_string(), "peers");
         });
-        ui.add_space(6.0);
 
+        card(ui, false, |ui| {
+        section_title(ui, "Layout map");
         // ---- layout map ----------------------------------------------------
         layout_map(ui, s);
-        ui.add_space(6.0);
 
+        });
+        card(ui, false, |ui| {
+        section_title(ui, "Actions");
         // ---- actions: square icon buttons, name + shortcut beside ----------
         ui.columns(2, |c| {
             if self.action(
@@ -561,7 +564,9 @@ impl ControlPanel {
                 .weak(),
             );
         }
-        ui.add_space(6.0);
+        });
+        card(ui, false, |ui| {
+        section_title(ui, "Sound & input");
         // ---- sound output + scrolling ------------------------------------------
         ui.horizontal(|ui| {
             ui.label(egui::RichText::new("Sound output").strong());
@@ -630,26 +635,17 @@ impl ControlPanel {
             .small()
             .weak(),
         );
-        ui.separator();
 
+        });
+        card(ui, false, |ui| {
         // ---- windows -----------------------------------------------------------
-        ui.label(
-            egui::RichText::new(format!("Windows ({})", s.windows.len()))
-                .size(16.0)
-                .strong(),
-        );
+        section_title(ui, &format!("Windows ({})", s.windows.len()));
         if s.windows.is_empty() {
             ui.label(egui::RichText::new("None yet. Focus an app and press Ctrl+Alt+G.").weak());
         }
         for (i, w) in s.windows.iter().enumerate() {
             let focused = s.focused == Some(w.id);
-            egui::Frame::group(ui.style())
-                .fill(if focused {
-                    egui::Color32::from_rgb(30, 42, 52)
-                } else {
-                    egui::Color32::from_rgb(24, 26, 32)
-                })
-                .show(ui, |ui| {
+            card(ui, focused, |ui| {
                     ui.horizontal(|ui| {
                         let name = format!("{}  {}", i + 1, source_name(&w.source));
                         ui.label(if focused {
@@ -699,10 +695,12 @@ impl ControlPanel {
                             .weak(),
                         );
                     });
-                });
+            });
         }
-        ui.separator();
 
+        });
+        card(ui, false, |ui| {
+        section_title(ui, "Advanced");
         ui.collapsing("Layout grid (fine tuning)", |ui| {
             let grid = self.grid_edit.get_or_insert(s.grid);
             let mut changed = false;
@@ -748,17 +746,82 @@ impl ControlPanel {
                     .weak(),
             );
         });
+        });
     }
+}
+
+const CARD: egui::Color32 = egui::Color32::from_rgb(28, 31, 39);
+const CARD_FOCUSED: egui::Color32 = egui::Color32::from_rgb(36, 52, 69);
+
+/// Material-ish dark theme matching the Android panel: rounded cards, no
+/// outlines, roomier spacing, slightly larger text.
+fn apply_theme(ctx: &egui::Context) {
+    let mut v = egui::Visuals::dark();
+    v.panel_fill = egui::Color32::from_rgb(18, 19, 23);
+    v.window_fill = v.panel_fill;
+    v.widgets.noninteractive.bg_fill = CARD;
+    v.widgets.inactive.bg_fill = egui::Color32::from_rgb(42, 46, 57);
+    v.widgets.inactive.weak_bg_fill = egui::Color32::from_rgb(42, 46, 57);
+    v.widgets.hovered.bg_fill = egui::Color32::from_rgb(56, 62, 78);
+    v.widgets.hovered.weak_bg_fill = egui::Color32::from_rgb(56, 62, 78);
+    v.widgets.active.bg_fill = egui::Color32::from_rgb(70, 140, 200);
+    v.widgets.active.weak_bg_fill = egui::Color32::from_rgb(70, 140, 200);
+    v.selection.bg_fill = egui::Color32::from_rgb(52, 100, 150);
+    for w in [
+        &mut v.widgets.noninteractive,
+        &mut v.widgets.inactive,
+        &mut v.widgets.hovered,
+        &mut v.widgets.active,
+        &mut v.widgets.open,
+    ] {
+        w.corner_radius = egui::CornerRadius::same(10);
+        w.bg_stroke = egui::Stroke::NONE;
+    }
+    ctx.set_visuals(v);
+    let mut style = (*ctx.style()).clone();
+    style.spacing.item_spacing = egui::vec2(10.0, 8.0);
+    style.spacing.button_padding = egui::vec2(12.0, 6.0);
+    style.spacing.combo_width = 120.0;
+    use egui::{FontId, TextStyle};
+    style.text_styles.insert(TextStyle::Body, FontId::proportional(15.0));
+    style.text_styles.insert(TextStyle::Button, FontId::proportional(15.0));
+    style.text_styles.insert(TextStyle::Small, FontId::proportional(12.0));
+    style.text_styles.insert(TextStyle::Heading, FontId::proportional(24.0));
+    ctx.set_style(style);
+}
+
+/// A rounded, full-width card; `focused` tints it like the Android window card.
+fn card(ui: &mut egui::Ui, focused: bool, add: impl FnOnce(&mut egui::Ui)) {
+    egui::Frame::new()
+        .fill(if focused { CARD_FOCUSED } else { CARD })
+        .corner_radius(14)
+        .inner_margin(egui::Margin::same(14))
+        .show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            add(ui);
+        });
+}
+
+/// Small caps-ish section label at the top of a card.
+fn section_title(ui: &mut egui::Ui, text: &str) {
+    ui.label(
+        egui::RichText::new(text.to_uppercase())
+            .size(12.0)
+            .strong()
+            .color(egui::Color32::from_gray(170)),
+    );
 }
 
 /// One stat tile: big number, small caption.
 fn stat(ui: &mut egui::Ui, value: &str, caption: &str) {
-    egui::Frame::group(ui.style())
-        .fill(egui::Color32::from_rgb(24, 26, 32))
-        .inner_margin(egui::Margin::symmetric(10, 6))
+    egui::Frame::new()
+        .fill(CARD)
+        .corner_radius(12)
+        .inner_margin(egui::Margin::symmetric(14, 8))
         .show(ui, |ui| {
+            ui.set_min_width(84.0);
             ui.vertical_centered(|ui| {
-                ui.label(egui::RichText::new(value).size(20.0).strong());
+                ui.label(egui::RichText::new(value).size(22.0).strong());
                 ui.label(egui::RichText::new(caption).small().weak());
             });
         });
@@ -771,7 +834,7 @@ fn layout_map(ui: &mut egui::Ui, s: &State) {
     let height = 150.0;
     let (resp, p) = ui.allocate_painter(egui::vec2(width, height), egui::Sense::hover());
     let r = resp.rect;
-    p.rect_filled(r, 6.0, egui::Color32::from_rgb(18, 20, 26));
+    p.rect_filled(r, 10.0, egui::Color32::from_rgb(18, 20, 26));
     // 110° of yaw across the width; same scale vertically.
     let k = width / 110f32.to_radians();
     let (cx, cy) = (r.center().x, r.center().y);

@@ -67,3 +67,4 @@
 - 2026-11-01 Android: pop-up touchpad is a docked overlay, not ModalBottomSheet (sheet drag ate finger motion). Tabs renamed Glasses / Laptop remote.
 - 2026-11-01 Android round 2: perch_last_error() → USB open failure text in status; USB device list in status; wm set-ignore-orientation-request per app display (no ROTATES_WITH_CONTENT); nearer/further/bigger/smaller/re-open per window (renderer nudge); touchpad buttons as icons, Home/Recents dropped.
 - 2026-11-01 Android round 3: perch_space_placement() so nudges/resizes start from the pinned pose; pin in touchpad bar; hardware keyboard/mouse/gamepad forwarded from the activity to the focused glasses window (injectKeyEvent AIDL id 9), panel switch.
+- 2026-11-01 Linux panel restyled to match the Android dashboard: Material-dark theme (apply_theme), rounded full-width cards with section titles, tinted focused window cards, larger text. No behaviour change.
