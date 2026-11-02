@@ -140,6 +140,8 @@ class SpatialRenderer(private val panelW: Int, private val panelH: Int) : GLSurf
 
     fun resizeWindow(index: Int, w: Int, h: Int, widthM: Float, heightM: Float) {
         val l = layers.firstOrNull { it.index == index } ?: return
+        val p = FloatArray(5)
+        if (PerchNative.spacePlacement(space, index, p) == 0) { l.yaw = p[0]; l.pitch = p[1]; l.distance = p[2] }
         l.surfaceTexture.setDefaultBufferSize(w, h)
         l.w = w; l.h = h; l.widthM = widthM; l.heightM = heightM
         PerchNative.spaceUpsert(space, index, l.kind, w, h, l.yaw, l.pitch, l.distance, widthM, heightM, l.anchor)
@@ -148,6 +150,11 @@ class SpatialRenderer(private val panelW: Int, private val panelH: Int) : GLSurf
     /** Move a window nearer/further (metres along its ray) and/or scale it (same as the Linux bar). */
     fun nudge(index: Int, dDistance: Float, scale: Float) {
         val l = layers.firstOrNull { it.index == index } ?: return
+        // pinHere moved the window inside the space; take that as the starting point.
+        val p = FloatArray(5)
+        if (PerchNative.spacePlacement(space, index, p) == 0) {
+            l.yaw = p[0]; l.pitch = p[1]; l.distance = p[2]; l.widthM = p[3]; l.heightM = p[4]
+        }
         l.distance = (l.distance + dDistance).coerceIn(0.6f, 6f)
         l.widthM = (l.widthM * scale).coerceIn(0.2f, 6f)
         l.heightM = (l.heightM * scale).coerceIn(0.2f, 6f)

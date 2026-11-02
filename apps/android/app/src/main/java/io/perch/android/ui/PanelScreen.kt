@@ -58,6 +58,7 @@ fun PanelScreen(ctx: Context, onMirror: () -> Unit) {
     val focused by AppWindows.focused.collectAsStateWithLifecycle()
     val err by AppWindows.lastError.collectAsStateWithLifecycle()
     val crash by CrashLog.last.collectAsStateWithLifecycle()
+    val routeHw by AppWindows.routeHardware.collectAsStateWithLifecycle()
     val displayNames by GlassesService.displayNames.collectAsStateWithLifecycle()
     var picker by remember { mutableStateOf(false) }
     var touchpad by remember { mutableStateOf(false) }
@@ -145,6 +146,15 @@ fun PanelScreen(ctx: Context, onMirror: () -> Unit) {
                     OutlinedButton({ GlassesService.stop(ctx) }) { Text("Stop") }
                 }
                 OutlinedButton(onMirror) { Text("Mirror phone screen") }
+            }
+        }
+        item {
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                Switch(routeHw, { AppWindows.routeHardware.value = it })
+                Column {
+                    Text("Bluetooth keyboard · mouse · gamepad → glasses", fontWeight = FontWeight.SemiBold)
+                    Text("while Perch is open, hardware input goes to the focused window", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
             }
         }
         // ---- shizuku ----
@@ -365,6 +375,7 @@ private fun BoxScope.TouchpadOverlay(onDismiss: () -> Unit) {
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
                 Small(Icons.AutoMirrored.Filled.ArrowBack, "back") { AppWindows.key(KeyEvent.KEYCODE_BACK) }
                 Small(Icons.Filled.SkipNext, "next window") { AppWindows.focusNext(1) }
+                Small(Icons.Filled.PushPin, "pin here") { fid?.let { AppWindows.pinHere(it) } }
                 Small(Icons.Filled.ScreenRotation, "rotate") { fid?.let { AppWindows.flip(it) } }
                 Small(Icons.Filled.ZoomIn, "bigger") { fid?.let { AppWindows.bigger(it) } }
                 Small(Icons.Filled.ZoomOut, "smaller") { fid?.let { AppWindows.smaller(it) } }

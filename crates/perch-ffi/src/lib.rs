@@ -307,6 +307,24 @@ pub unsafe extern "C" fn perch_space_pin_here(s: *mut PerchSpace, index: c_int) 
     sp.ws.pin_here(id, &pose).map(|_| 0).unwrap_or(-1)
 }
 
+/// Current placement of window `index`: `out5` = yaw, pitch, distance,
+/// width_m, height_m. Lets a renderer that caches placement re-sync after
+/// `perch_space_pin_here` moved the window. Returns 0, or -1 if absent.
+#[no_mangle]
+pub unsafe extern "C" fn perch_space_placement(s: *const PerchSpace, index: c_int, out5: *mut f32) -> c_int {
+    if s.is_null() || out5.is_null() || index < 0 {
+        return -1;
+    }
+    let sp = &*s;
+    let Some(w) = sp.ws.windows.get(index as usize) else {
+        return -1;
+    };
+    let o = std::slice::from_raw_parts_mut(out5, 5);
+    let p = &w.placement;
+    o.copy_from_slice(&[p.yaw, p.pitch, p.distance, p.width_m, p.height_m]);
+    0
+}
+
 /// Number of windows.
 #[no_mangle]
 pub unsafe extern "C" fn perch_space_count(s: *const PerchSpace) -> c_int {

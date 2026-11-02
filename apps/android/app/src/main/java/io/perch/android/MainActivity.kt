@@ -20,6 +20,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import io.perch.android.host.AppWindows
 import io.perch.android.host.GlassesService
 import io.perch.android.host.MirrorSource
 import io.perch.android.ui.CrashLog
@@ -79,6 +80,14 @@ class MainActivity : ComponentActivity() {
             }
         }
     }
+
+    // Bluetooth keyboard / mouse / gamepad: while Perch is in front and a glasses
+    // window is focused, send them there instead of to the panel.
+    override fun dispatchKeyEvent(event: android.view.KeyEvent): Boolean =
+        AppWindows.hardwareKey(event) || super.dispatchKeyEvent(event)
+
+    override fun dispatchGenericMotionEvent(ev: android.view.MotionEvent): Boolean =
+        AppWindows.hardwareMotion(ev) || super.dispatchGenericMotionEvent(ev)
 
     @Composable
     private fun HostScreen() {

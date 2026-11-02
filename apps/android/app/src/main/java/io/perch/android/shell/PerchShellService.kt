@@ -158,6 +158,7 @@ class PerchShellService(private val context: Context) : IPerchShell.Stub() {
     }
 
     override fun injectMotion(displayId: Int, event: MotionEvent): Boolean = inject(event, displayId)
+    override fun injectKeyEvent(displayId: Int, event: KeyEvent): Boolean = inject(event, displayId)
 
     override fun injectKey(displayId: Int, keyCode: Int, down: Boolean, metaState: Int): Boolean {
         val now = android.os.SystemClock.uptimeMillis()

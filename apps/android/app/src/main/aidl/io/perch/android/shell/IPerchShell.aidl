@@ -5,6 +5,7 @@ package io.perch.android.shell;
 
 import android.view.Surface;
 import android.view.MotionEvent;
+import android.view.KeyEvent;
 
 interface IPerchShell {
     /** Create a trusted virtual display rendering into `surface`; returns its display id or -1. */
@@ -23,6 +24,8 @@ interface IPerchShell {
     int uid() = 7;
     /** Why the last call failed (exception text), for the panel. */
     String lastError() = 8;
+    /** Inject a complete key event (physical keyboard / gamepad), retargeted to the display. */
+    boolean injectKeyEvent(int displayId, in KeyEvent event) = 9;
     /** Shizuku convention: tear the service down. */
     void destroy() = 16777114;
 }

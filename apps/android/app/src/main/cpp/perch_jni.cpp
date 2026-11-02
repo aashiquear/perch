@@ -97,6 +97,14 @@ Java_io_perch_android_native_PerchNative_spaceUpsert(JNIEnv *, jobject, jlong s,
 }
 
 JNIEXPORT jint JNICALL
+Java_io_perch_android_native_PerchNative_spacePlacement(JNIEnv *env, jobject, jlong s, jint index, jfloatArray out5) {
+    jfloat *o = env->GetFloatArrayElements(out5, nullptr);
+    int r = perch_space_placement(reinterpret_cast<const PerchSpace *>(s), index, o);
+    env->ReleaseFloatArrayElements(out5, o, 0);
+    return r;
+}
+
+JNIEXPORT jint JNICALL
 Java_io_perch_android_native_PerchNative_spacePinHere(JNIEnv *, jobject, jlong s, jint index) {
     return perch_space_pin_here(reinterpret_cast<PerchSpace *>(s), index);
 }

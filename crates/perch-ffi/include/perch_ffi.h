@@ -38,6 +38,8 @@ int  perch_space_count(const PerchSpace *s);
 /* out8 = TL,TR,BR,BL (x,y) in panel px; h9 = row-major 3x3 homography (may be NULL). 1 on screen, 0 off, -1 behind. */
 int  perch_space_project(PerchSpace *s, int index, float dt, float *out8, float *h9);
 int  perch_space_json(const PerchSpace *s, char *buf, size_t cap);
+/* out5 = yaw, pitch, distance, width_m, height_m of window `index`; 0 or -1. */
+int  perch_space_placement(const PerchSpace *s, int index, float *out5);
 int  perch_space_load_json(PerchSpace *s, const char *json);
 
 /* ---- glasses (Android USB fd) ----------------------------------------- */

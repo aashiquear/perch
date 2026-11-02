@@ -33,6 +33,8 @@ object PerchNative {
         yaw: Float, pitch: Float, distance: Float, widthM: Float, heightM: Float, anchor: Int,
     ): Int
     external fun spacePinHere(s: Long, index: Int): Int
+    /** out5 = yaw, pitch, distance, widthM, heightM. */
+    external fun spacePlacement(s: Long, index: Int, out5: FloatArray): Int
     external fun spaceCount(s: Long): Int
     /** out8 = TL,TR,BR,BL (x,y) px; h9 row-major homography. 1 on-screen, 0 off, -1 behind. */
     external fun spaceProject(s: Long, index: Int, dt: Float, out8: FloatArray, h9: FloatArray?): Int

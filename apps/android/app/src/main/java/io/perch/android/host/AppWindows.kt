@@ -197,6 +197,48 @@ object AppWindows {
         ev.recycle()
     }
 
+    /** When true, physical keyboard / mouse / gamepad events reaching the Perch activity go to the focused window. */
+    val routeHardware: MutableStateFlow<Boolean> = MutableStateFlow(true)
+
+    /** A key event from a real device (not the on-screen keyboard). True if consumed. */
+    fun hardwareKey(ev: android.view.KeyEvent): Boolean {
+        if (!routeHardware.value || ev.deviceId <= 0) return false
+        val w = focusedWin() ?: return false
+        val shell = ShellBridge.shell.value ?: return false
+        val copy = android.view.KeyEvent(ev)
+        return runCatching { shell.injectKeyEvent(w.displayId, copy) }.getOrDefault(false)
+    }
+
+    /** Mouse / trackpad / joystick motion from a real device. True if consumed. */
+    fun hardwareMotion(ev: MotionEvent): Boolean {
+        if (!routeHardware.value || ev.deviceId <= 0) return false
+        val w = focusedWin() ?: return false
+        val src = ev.source
+        if (src and InputDevice.SOURCE_JOYSTICK == InputDevice.SOURCE_JOYSTICK) {
+            val shell = ShellBridge.shell.value ?: return false
+            val copy = MotionEvent.obtain(ev)
+            val ok = runCatching { shell.injectMotion(w.displayId, copy) }.getOrDefault(false)
+            copy.recycle(); return ok
+        }
+        if (src and InputDevice.SOURCE_MOUSE != InputDevice.SOURCE_MOUSE) return false
+        when (ev.actionMasked) {
+            MotionEvent.ACTION_HOVER_MOVE, MotionEvent.ACTION_MOVE -> {
+                val dx = ev.getAxisValue(MotionEvent.AXIS_RELATIVE_X).takeIf { it != 0f } ?: (ev.x - mouseX)
+                val dy = ev.getAxisValue(MotionEvent.AXIS_RELATIVE_Y).takeIf { it != 0f } ?: (ev.y - mouseY)
+                mouseX = ev.x; mouseY = ev.y
+                if (mouseSeen) cursorMove(dx * 1.5f, dy * 1.5f)
+                mouseSeen = true
+            }
+            MotionEvent.ACTION_HOVER_ENTER, MotionEvent.ACTION_HOVER_EXIT -> { mouseX = ev.x; mouseY = ev.y; mouseSeen = ev.actionMasked == MotionEvent.ACTION_HOVER_ENTER }
+            MotionEvent.ACTION_BUTTON_PRESS, MotionEvent.ACTION_DOWN -> pressDown()
+            MotionEvent.ACTION_BUTTON_RELEASE, MotionEvent.ACTION_UP -> pressUp()
+            MotionEvent.ACTION_SCROLL -> scroll(ev.getAxisValue(MotionEvent.AXIS_VSCROLL))
+            else -> return false
+        }
+        return true
+    }
+    private var mouseX = 0f; private var mouseY = 0f; private var mouseSeen = false
+
     /** Back key etc. to the focused app. */
     fun key(keyCode: Int) {
         val w = focusedWin() ?: return
