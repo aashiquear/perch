@@ -9,7 +9,10 @@ import android.view.MotionEvent
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -47,6 +50,7 @@ import kotlin.math.abs
  * needs: the app picker, portrait/landscape per window, the pop-up
  * touchpad and Shizuku status.
  */
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun PanelScreen(ctx: Context, onMirror: () -> Unit) {
     val status by GlassesService.status.collectAsStateWithLifecycle()
@@ -190,7 +194,7 @@ fun PanelScreen(ctx: Context, onMirror: () -> Unit) {
                     IconButton({ AppWindows.pinHere(w.id) }) { Icon(Icons.Filled.PushPin, "pin where I look") }
                     IconButton({ AppWindows.remove(w.id) }) { Icon(Icons.Filled.Close, "close") }
                 }
-                if (isFocused) Row(Modifier.padding(start = 6.dp, end = 6.dp, bottom = 4.dp), horizontalArrangement = Arrangement.SpaceEvenly) {
+                if (isFocused) FlowRow(Modifier.fillMaxWidth().padding(start = 6.dp, end = 6.dp, bottom = 4.dp), horizontalArrangement = Arrangement.SpaceEvenly, verticalArrangement = Arrangement.spacedBy(6.dp)) {
                     Small(Icons.Filled.ZoomIn, "bigger") { AppWindows.bigger(w.id) }
                     Small(Icons.Filled.ZoomOut, "smaller") { AppWindows.smaller(w.id) }
                     Small(Icons.Filled.ArrowDownward, "nearer") { AppWindows.nearer(w.id) }
@@ -210,9 +214,11 @@ fun PanelScreen(ctx: Context, onMirror: () -> Unit) {
 /** Compact icon button with a one-word caption under it. */
 @Composable
 private fun Small(icon: ImageVector, label: String, onClick: () -> Unit) {
-    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+    // Fixed width so a row of these wraps cleanly on narrow phones instead of
+    // squeezing the caption into a column of single characters.
+    Column(Modifier.width(64.dp), horizontalAlignment = Alignment.CenterHorizontally) {
         FilledTonalIconButton(onClick, Modifier.size(40.dp)) { Icon(icon, label) }
-        Text(label, style = MaterialTheme.typography.labelSmall)
+        Text(label, style = MaterialTheme.typography.labelSmall, maxLines = 1, softWrap = false)
     }
 }
 
@@ -338,7 +344,7 @@ private fun AppPicker(ctx: Context, onPick: (String, Boolean) -> Unit, onDismiss
  * Docked at the bottom of the panel, not a ModalBottomSheet: the sheet's own
  * drag-to-dismiss swallowed vertical finger movement before the pad saw it.
  */
-@OptIn(ExperimentalComposeUiApi::class)
+@OptIn(ExperimentalComposeUiApi::class, ExperimentalLayoutApi::class)
 @Composable
 private fun BoxScope.TouchpadOverlay(onDismiss: () -> Unit) {
     val focused by AppWindows.focused.collectAsStateWithLifecycle()
@@ -351,7 +357,7 @@ private fun BoxScope.TouchpadOverlay(onDismiss: () -> Unit) {
     ) {
         Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp).padding(top = 12.dp, bottom = 24.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
-                Row(Modifier.weight(1f), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                Row(Modifier.weight(1f).horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                     windows.forEach { w ->
                         FilterChip(selected = focused == w.id, onClick = { AppWindows.focus(w.id) }, label = { Text(w.label) })
                     }
@@ -359,8 +365,10 @@ private fun BoxScope.TouchpadOverlay(onDismiss: () -> Unit) {
                 IconButton(onDismiss) { Icon(Icons.Filled.Close, "close touchpad") }
             }
             val gestures = remember { PhoneTouchpad() }
+            // Pad height follows the screen: ~38 % of it, so the bar below stays reachable.
+            val padH = (LocalConfiguration.current.screenHeightDp * 0.38f).dp.coerceIn(200.dp, 380.dp)
             Box(
-                Modifier.fillMaxWidth().height(360.dp).clip(RoundedCornerShape(16.dp))
+                Modifier.fillMaxWidth().height(padH).clip(RoundedCornerShape(16.dp))
                     .background(MaterialTheme.colorScheme.surfaceVariant)
                     .pointerInteropFilter { gestures.onTouch(it) },
                 contentAlignment = Alignment.Center,
@@ -372,7 +380,7 @@ private fun BoxScope.TouchpadOverlay(onDismiss: () -> Unit) {
             }
             // Icon row. No Home/Recents: those act on the phone's own display, not the glasses.
             val fid = focused
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
+            FlowRow(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly, verticalArrangement = Arrangement.spacedBy(6.dp), maxItemsInEachRow = 5) {
                 Small(Icons.AutoMirrored.Filled.ArrowBack, "back") { AppWindows.key(KeyEvent.KEYCODE_BACK) }
                 Small(Icons.Filled.SkipNext, "next window") { AppWindows.focusNext(1) }
                 Small(Icons.Filled.PushPin, "pin here") { fid?.let { AppWindows.pinHere(it) } }

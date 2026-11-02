@@ -121,6 +121,42 @@ class PerchShellService(private val context: Context) : IPerchShell.Stub() {
         p.waitFor(); out.trim()
     } catch (e: Throwable) { "${cmd[0]} failed: $e" }
 
+    /**
+     * `am stack list` prints, per task: "taskId=N: ComponentInfo{pkg/cls} ...
+     * displayId=D ..." (the exact layout varies by release, so we match tokens).
+     */
+    private fun tasks(): List<Triple<Int, String, Int>> {
+        val out = sh("am", "stack", "list")
+        val res = ArrayList<Triple<Int, String, Int>>()
+        var display = -1
+        for (line in out.lines()) {
+            Regex("displayId=(\\d+)").find(line)?.let { display = it.groupValues[1].toInt() }
+            val t = Regex("taskId=(\\d+): ComponentInfo\\{([^/]+)/").find(line) ?: continue
+            val d = Regex("displayId=(\\d+)").find(line)?.groupValues?.get(1)?.toInt() ?: display
+            res += Triple(t.groupValues[1].toInt(), t.groupValues[2], d)
+        }
+        return res
+    }
+
+    override fun closeApp(displayId: Int, pkg: String): String {
+        val all = tasks()
+        val mine = all.filter { it.third == displayId }
+        val notes = ArrayList<String>()
+        for ((id, _, _) in mine) {
+            val r = sh("am", "stack", "remove", id.toString())
+            if (r.isNotEmpty()) notes += "task $id: $r"
+        }
+        val elsewhere = all.any { it.second == pkg && it.third != displayId }
+        val still = tasks().any { it.third == displayId }
+        if ((mine.isEmpty() || still) && !elsewhere) {
+            // Nothing we could enumerate / remove, and the app is not in use on the
+            // phone screen: stopping it is the only way to get it out of Recents.
+            val r = sh("am", "force-stop", pkg)
+            if (r.isNotEmpty()) notes += "force-stop: $r"
+        }
+        return notes.joinToString("; ")
+    }
+
     override fun launch(displayId: Int, component: String): String {
         // `am` is what adb shell uses; as uid shell it may target any display.
         val cmd = listOf(

@@ -33,52 +33,121 @@ bobbing mirror. Step-by-step recipes for each: [docs/USE-CASES.md](docs/USE-CASE
 | Portal/PipeWire capture (other Wayland compositors) | **done; input via the RemoteDesktop portal** |
 | Keyboard/trackpad grab (evdev, touchpad gestures) + uinput fallback (`perch-input`) | **done, on device** |
 | Daemon `perchd` with on-glasses control bar and desktop dashboard; CLI `perch` | **done** |
-| Android host app: panel, apps as glasses displays via Shizuku, pop-up touchpad ([docs/ANDROID.md](docs/ANDROID.md)) | **debug APK builds; on-device test pending** |
+| Android host app: panel, apps as glasses displays via Shizuku, pop-up touchpad, Bluetooth input ([docs/ANDROID.md](docs/ANDROID.md)) | **working on an S24 Ultra: 3DOF, multi-app, touchpad, keyboard** |
 | iPad touchpad app (SwiftUI) | written, not yet built |
 | Windows / macOS daemons | shared Rust core; backends → M4 |
 
 See [docs/ROADMAP.md](docs/ROADMAP.md) for milestones and
 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for how it fits together.
 
-## Quick start (Linux, Ubuntu 24.04+/26.04, GNOME on Wayland)
+## Install (users)
 
-Prebuilt binaries for x86_64 are attached to each
-[GitHub release](https://github.com/aashiquear/perch/releases); or build:
+### Linux — Ubuntu 24.04+/26.04, GNOME on Wayland
 
-```bash
-# 1. toolchain + libraries
-curl https://sh.rustup.rs -sSf | sh            # Rust ≥ 1.80
-sudo apt install build-essential pkg-config libudev-dev libpipewire-0.3-dev libclang-dev
+1. Download `perch-vX.Y.Z-linux-x86_64.tar.gz` from the latest
+   [GitHub release](https://github.com/aashiquear/perch/releases) and unpack it:
 
-# 2. udev rules (glasses without sudo) and the input group (trackpad/keyboard grab)
-sudo cp udev/70-perch-rokid.rules udev/70-perch-uinput.rules /etc/udev/rules.d/
-sudo udevadm control --reload-rules && sudo udevadm trigger
-sudo usermod -aG input $USER                    # then log out and back in
+   ```bash
+   tar xzf perch-v*-linux-x86_64.tar.gz && cd perch-v*-linux-x86_64
+   sudo install -m755 perchd perch /usr/local/bin/
+   ```
+2. Let your user reach the glasses and the input devices (once):
 
-# 3. build + headless tests
-cargo test
-cargo build --release -p perch-daemon -p perch-cli --features perch-daemon/full-linux
+   ```bash
+   sudo cp udev/70-perch-rokid.rules udev/70-perch-uinput.rules /etc/udev/rules.d/
+   sudo udevadm control --reload-rules && sudo udevadm trigger
+   sudo usermod -aG input $USER        # log out and back in
+   ```
+3. Plug in the Rokid Max; GNOME shows it as a second monitor. Run `perchd`
+   (it writes `~/.config/perch/perchd.toml` on first start; set
+   `display.monitor_name` to the glasses' connector, e.g. `"DP-5"`, if it
+   picks the wrong one). The dashboard window opens on the laptop.
+4. First time only: glasses flat on a table, `perch calibrate --seconds 30`.
 
-# 4. run with the glasses plugged in (set display.monitor_name in dev/perchd.toml, e.g. "DP-5")
-./target/release/perchd --config-dir ./dev
-./target/release/perch calibrate --seconds 30   # glasses flat on a table, once
-```
-
-Then, with the glasses on:
+With the glasses on:
 
 | do | how |
 |---|---|
-| move the focused app to the glasses | **Ctrl+Alt+G** (full) / **Ctrl+Alt+H** (half width), or the dashboard |
+| move the focused app to the glasses | **Ctrl+Alt+G** (full) / **Ctrl+Alt+H** (half width), or "To glasses" on the dashboard |
 | work in it: mouse + keyboard go to the glasses | **Ctrl+Alt+P** (again to come back) |
 | re-centre the view | temple button, or RECENTER on the bar |
+| nearer / further / bigger / smaller / pin | the bar under the focused window, or the dashboard's window card |
 | bring an app back / close it / resize its display | bar tiles, dashboard, or `perch remove`, `perch close-app`, `perch resize` |
+| sound to the glasses, natural scrolling | dashboard → Sound & input |
 
 Each glasses window is a virtual monitor GNOME creates for Perch; quitting
-`perchd` returns every app to the laptop. See [docs/UX.md](docs/UX.md).
+`perchd` returns every app to the laptop. See [docs/UX.md](docs/UX.md) and
+[docs/USE-CASES.md](docs/USE-CASES.md).
 
-Phone/iPad: install the app, it finds `perchd` over mDNS, tap it, you have a
-trackpad. See [apps/android/README.md](apps/android/README.md) and
-[apps/ipad/README.md](apps/ipad/README.md).
+### Android — phone as the host (Samsung S24 Ultra tested)
+
+Prerequisites:
+
+- A phone with USB-C DisplayPort output (the Rokid Max shows an image when
+  plugged in) running Android 14 or newer.
+- [Shizuku](https://shizuku.rikka.app) from the Play Store. Perch uses it to
+  open *other* apps on glasses displays, which stock Android forbids a normal
+  app; see [docs/ANDROID.md](docs/ANDROID.md). Start Shizuku once per boot:
+  Settings → Developer options → Wireless debugging → on, then in Shizuku
+  "Start via Wireless debugging" (pair once).
+- On Samsung: Settings → Connected devices → Samsung DeX → turn off
+  "Auto start when HDMI/DP is connected", or DeX takes the glasses.
+
+Install and first run:
+
+1. Download `perch-vX.Y.Z-android.apk` from the release (or build it, below)
+   and install it; allow "install unknown apps" if asked.
+2. Open Perch → the Shizuku card → **Allow**. The Shizuku tile shows **on**.
+3. Plug in the glasses, accept the USB prompt, tap **Start**. The status line
+   reads `tracking Rokid Max`; **Calibrate** once with the glasses on a table.
+4. **Add app** → pick an app and portrait/landscape → it opens on the glasses
+   straight ahead. Add more; tap a card to focus it.
+5. **Touchpad** pops up the trackpad: one finger moves the cursor, tap taps,
+   two fingers scroll, three-finger swipe switches windows. Its bar has Back,
+   next, pin, rotate, bigger/smaller, nearer/further and re-open.
+6. A Bluetooth keyboard, mouse or gamepad paired to the phone goes to the
+   focused glasses window while Perch is on screen (switch in the panel).
+7. ✕ on a window card closes the app and its display; **All back** clears
+   everything. Without Shizuku, **Mirror phone screen** still gives one window.
+
+The **Laptop remote** tab turns the phone into a trackpad + keyboard for a
+laptop running `perchd` (found over mDNS on the same Wi-Fi).
+
+## Developer workflow
+
+```bash
+# toolchain + libraries (Ubuntu)
+curl https://sh.rustup.rs -sSf | sh            # Rust ≥ 1.80
+sudo apt install build-essential pkg-config libudev-dev libpipewire-0.3-dev libclang-dev
+
+cargo test                                      # pure core + daemon, no hardware
+just ci                                         # exactly what GitHub Actions runs
+cargo run -p perch-daemon --features full-linux -- --mock synthetic --config-dir ./dev   # no glasses
+cargo run -p perch-daemon --features full-linux -- --config-dir ./dev                    # glasses plugged in
+cargo run -p perch-cli -- status
+just hw-check                                   # IMU rate, drift, display mode → .claude/memory/hardware-log.md
+```
+
+Android (no Android Studio needed; see [apps/android/README.md](apps/android/README.md)):
+
+```bash
+rustup target add aarch64-linux-android && cargo install cargo-ndk
+# JDK 21, Gradle 8.11, Android SDK with NDK 27 + CMake 3.22, then:
+cd apps/android && gradle assembleDebug          # builds perch-ffi via cargo-ndk, then the APK
+adb install -r app/build/outputs/apk/debug/app-debug.apk
+gradle testDebugUnitTest                         # postcard byte parity with Rust
+```
+
+Rules of the road (details in [CLAUDE.md](CLAUDE.md)): logic lives in the Rust
+crates with tests, platform code is a thin shell; wire-format changes bump
+`PROTOCOL_VERSION` and update `docs/PROTOCOL.md`; `cargo test` stays green
+without features or hardware.
+
+Releasing: tag `vX.Y.Z` on `main`; `.github/workflows/release.yml` builds the
+Linux tarball and attaches it to the GitHub release (`/release` in Claude Code
+walks through it). The Android APK is attached by hand from
+`apps/android/app/build/outputs/apk/debug/app-debug.apk` until the Android
+job is wired into the workflow.
 
 ## Repository layout
 

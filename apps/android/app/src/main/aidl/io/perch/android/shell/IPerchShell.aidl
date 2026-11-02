@@ -26,6 +26,8 @@ interface IPerchShell {
     String lastError() = 8;
     /** Inject a complete key event (physical keyboard / gamepad), retargeted to the display. */
     boolean injectKeyEvent(int displayId, in KeyEvent event) = 9;
+    /** Remove every task on the display (so the app leaves Recents); falls back to force-stop when the app has no task elsewhere. Returns a note. */
+    String closeApp(int displayId, String pkg) = 10;
     /** Shizuku convention: tear the service down. */
     void destroy() = 16777114;
 }

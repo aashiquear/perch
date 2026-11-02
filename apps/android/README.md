@@ -6,7 +6,7 @@ Two modes in one app (see `docs/PLATFORMS.md` §Android for the full story):
   IMU, runs the shared Rust tracker at 1 kHz and presents 3DOF windows on the
   glasses. Add your phone screen as a window with one tap. Temple button =
   recenter.
-- **Touchpad** — controller for a laptop running `perchd`: trackpad,
+- **Laptop remote** — controller for a laptop running `perchd`: trackpad,
   keyboard, window chips, presets. Found automatically via mDNS.
 
 ## Build
@@ -15,9 +15,10 @@ Two modes in one app (see `docs/PLATFORMS.md` §Android for the full story):
 # Rust for Android (once)
 rustup target add aarch64-linux-android
 cargo install cargo-ndk
-# Android Studio Ladybug+ with NDK 27 and CMake 3.22 installed, then:
+# Android Studio Ladybug+ (or JDK 21 + Gradle 8.11 + SDK cmdline-tools) with NDK 27 and CMake 3.22, then:
 cd apps/android
 ./gradlew assembleDebug        # runs `cargo ndk … -p perch-ffi --features rokid` first
+# the JNI wrapper links against libperch_ffi.so by SONAME; perch-ffi/build.rs sets it on Android
 ```
 
 The Gradle `cargoBuild` task writes `libperch_ffi.so` into
@@ -39,7 +40,15 @@ Unit tests: `./gradlew testDebugUnitTest` (postcard byte parity with Rust).
    display in the glasses, straight ahead. Add more; tap a card to focus.
 5. **Touchpad** → move the cursor in the focused window; tap, scroll,
    3-finger swipe to switch windows. ⟳ flips portrait/landscape, ✕ closes.
-6. No Shizuku? **Mirror phone screen** still gives one floating window.
+6. A Bluetooth keyboard / mouse / gamepad paired to the phone goes to the
+   focused glasses window while Perch is in front (switch in the panel).
+7. ✕ on a window card ends the app's tasks on that display and releases it;
+   **All back** does it for every window.
+8. No Shizuku? **Mirror phone screen** still gives one floating window.
+
+Debugging without adb: a crash shows as a red card at the top of the panel on
+the next launch (from `files/crash.txt`); helper-side failures show under the
+buttons with the real exception text.
 
 ## Build on this machine without Android Studio
 

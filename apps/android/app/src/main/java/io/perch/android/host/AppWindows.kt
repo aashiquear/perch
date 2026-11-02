@@ -116,6 +116,9 @@ object AppWindows {
 
     fun remove(id: Int) {
         val win = windows.value.firstOrNull { it.id == id } ?: return
+        // End the app's tasks on this display first so it leaves Recents, then drop the display.
+        runCatching { ShellBridge.shell.value?.closeApp(win.displayId, win.pkg) }
+            .onSuccess { if (!it.isNullOrEmpty()) Log.i(TAG, "closeApp: $it") }
         runCatching { ShellBridge.shell.value?.releaseDisplay(win.displayId) }
         GlassesService.presentation?.hideWindow(win.layer)
         windows.value = windows.value.filter { it.id != id }

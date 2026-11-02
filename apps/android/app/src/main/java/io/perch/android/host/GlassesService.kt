@@ -164,7 +164,12 @@ class GlassesService : Service() {
         val mp = try { MirrorSource.fromResult(this, resultCode, data) } catch (e: Exception) {
             status.value = "screen capture refused: ${e.message?.take(120)}"; null
         } ?: return
-        addWindow(MirrorSource(this, mp), PerchNative.SOURCE_PHONE, 1080, 2340, 0.55f, 1.2f) {}
+        // Mirror at the phone's real pixel size so text is not resampled, and give
+        // the window the same aspect so nothing stretches (1080×2340 was a guess).
+        val b = (getSystemService(WINDOW_SERVICE) as android.view.WindowManager).maximumWindowMetrics.bounds
+        val (w, h) = b.width() to b.height()
+        val rowH = 0.8f
+        addWindow(MirrorSource(this, mp), PerchNative.SOURCE_PHONE, w, h, rowH * w / h, rowH) {}
     }
 
     private fun findAndOpen() {
