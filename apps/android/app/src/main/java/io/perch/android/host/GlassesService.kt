@@ -59,11 +59,23 @@ class GlassesService : Service() {
             val i = Intent(ctx, GlassesService::class.java).putExtra("mock", useMock)
             ctx.startForegroundService(i)
         }
+        /**
+         * Hand a granted screen-capture result to the service. Android 14+ only
+         * lets a service *become* a mediaProjection foreground service after the
+         * user accepted the prompt, and `getMediaProjection` must run after that
+         * promotion — so the whole mirror path goes through the service.
+         */
+        fun startMirror(ctx: Context, resultCode: Int, data: Intent) {
+            val i = Intent(ctx, GlassesService::class.java)
+                .putExtra("projection_code", resultCode)
+                .putExtra("projection_data", data)
+            ctx.startForegroundService(i)
+        }
+        /** Names of all displays the phone sees, for the panel ("is DeX holding the glasses?"). */
+        val displayNames: MutableStateFlow<String> = MutableStateFlow("")
         fun stop(ctx: Context) = ctx.stopService(Intent(ctx, GlassesService::class.java))
         fun recenter() { if (tracker != 0L) PerchNative.trackerRecenter(tracker) }
         @Volatile private var instance: GlassesService? = null
-        /** Add a phone-screen mirror window at the current gaze (called after the MediaProjection prompt). */
-        fun addMirror(src: MirrorSource) { instance?.addWindow(src, PerchNative.SOURCE_PHONE, 1080, 2340, 0.55f, 1.2f) {} }
         /** The glasses presentation, once the external display is up. */
         val presentation: GlassesPresentation? get() = instance?.presentation
         /** True while the glasses display is attached. */
@@ -104,19 +116,53 @@ class GlassesService : Service() {
         else registerReceiver(usbReceiver, filter)
     }
 
-    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        val type = if (Build.VERSION.SDK_INT >= 34)
-            ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE or ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION
-        else 0
-        if (Build.VERSION.SDK_INT >= 29) startForeground(NOTIF_ID, notification(), type) else startForeground(NOTIF_ID, notification())
+    private var projecting = false
 
-        if (intent?.getBooleanExtra("mock", false) == true) {
-            startImu(PerchNative.glassesOpenMock(), "mock glasses")
-        } else {
-            findAndOpen()
+    /**
+     * Foreground with the `connectedDevice` type only; `mediaProjection` is
+     * added by [promoteToProjection] once the user granted a capture. Declaring
+     * it up front throws SecurityException on Android 14+ (the old crash on Start).
+     */
+    private fun foreground(withProjection: Boolean): Boolean {
+        var type = ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE
+        if (withProjection) type = type or ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION
+        return try {
+            startForeground(NOTIF_ID, notification(), type)
+            true
+        } catch (e: Exception) {
+            Log.e(TAG, "startForeground: $e")
+            status.value = "foreground service refused: ${e.message?.take(120)}"
+            false
         }
-        watchDisplays()
+    }
+
+    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        if (!projecting && !foreground(false)) { stopSelf(); return START_NOT_STICKY }
+
+        val code = intent?.getIntExtra("projection_code", Int.MIN_VALUE) ?: Int.MIN_VALUE
+        if (code != Int.MIN_VALUE) {
+            val data: Intent? = intent?.getParcelableExtra("projection_data")
+            if (data != null) promoteToProjection(code, data)
+            if (glasses != 0L) return START_STICKY   // already tracking: nothing else to start
+        }
+
+        if (glasses == 0L) {
+            if (intent?.getBooleanExtra("mock", false) == true) startImu(PerchNative.glassesOpenMock(), "mock glasses")
+            else findAndOpen()
+        }
+        if (displayListener == null) watchDisplays()
         return START_STICKY
+    }
+
+    private fun promoteToProjection(resultCode: Int, data: Intent) {
+        if (!projecting) {
+            if (!foreground(true)) return
+            projecting = true
+        }
+        val mp = try { MirrorSource.fromResult(this, resultCode, data) } catch (e: Exception) {
+            status.value = "screen capture refused: ${e.message?.take(120)}"; null
+        } ?: return
+        addWindow(MirrorSource(this, mp), PerchNative.SOURCE_PHONE, 1080, 2340, 0.55f, 1.2f) {}
     }
 
     private fun findAndOpen() {
@@ -204,11 +250,18 @@ class GlassesService : Service() {
     private fun watchDisplays() {
         val dm = getSystemService(DISPLAY_SERVICE) as DisplayManager
         fun attach() {
+            displayNames.value = dm.displays.joinToString(" · ") { "${it.displayId}:${it.name} ${it.mode.physicalWidth}×${it.mode.physicalHeight}" }
             val ext = dm.displays.firstOrNull { it.displayId != Display.DEFAULT_DISPLAY && it.isValid }
             if (ext != null && presentation == null) {
                 Log.i(TAG, "presenting on ${ext.name} ${ext.mode.physicalWidth}x${ext.mode.physicalHeight}")
-                presentation = GlassesPresentation(this, ext).also { it.show() }
-                glassesAttached.value = true
+                try {
+                    presentation = GlassesPresentation(this, ext).also { it.show() }
+                    glassesAttached.value = true
+                } catch (e: Exception) {
+                    Log.e(TAG, "presentation: $e")
+                    status.value = "cannot present on ${ext.name}: ${e.message?.take(100)}"
+                    presentation = null
+                }
             } else if (ext == null && presentation != null) {
                 presentation?.dismiss(); presentation = null
                 glassesAttached.value = false

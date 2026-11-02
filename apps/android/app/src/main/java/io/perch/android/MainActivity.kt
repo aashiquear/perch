@@ -19,13 +19,19 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import io.perch.android.host.GlassesService
 import io.perch.android.host.MirrorSource
+import io.perch.android.ui.CrashLog
 import io.perch.android.touchpad.PerchClient
 import io.perch.android.touchpad.TouchpadSurface
 import io.perch.android.shell.ShellBridge
 import io.perch.android.ui.PanelScreen
 import io.perch.android.ui.PerchTheme
 
-class PerchApp : Application()
+class PerchApp : Application() {
+    override fun onCreate() {
+        super.onCreate()
+        CrashLog.install(this)
+    }
+}
 
 /**
  * Two jobs, one app:
@@ -43,9 +49,9 @@ class MainActivity : ComponentActivity() {
 
     private val projectionLauncher = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { r ->
         val data = r.data ?: return@registerForActivityResult
-        val mp = MirrorSource.fromResult(this, r.resultCode, data) ?: return@registerForActivityResult
-        // Hand the projection to the running service's presentation.
-        GlassesService.addMirror(MirrorSource(this, mp))
+        // The service promotes itself to a mediaProjection foreground service, then
+        // creates the projection (Android 14+ requires exactly that order).
+        GlassesService.startMirror(this, r.resultCode, data)
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {

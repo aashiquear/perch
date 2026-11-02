@@ -27,6 +27,7 @@ import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.pointerInteropFilter
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.core.graphics.drawable.toBitmap
@@ -55,6 +56,8 @@ fun PanelScreen(ctx: Context, onMirror: () -> Unit) {
     val windows by AppWindows.windows.collectAsStateWithLifecycle()
     val focused by AppWindows.focused.collectAsStateWithLifecycle()
     val err by AppWindows.lastError.collectAsStateWithLifecycle()
+    val crash by CrashLog.last.collectAsStateWithLifecycle()
+    val displayNames by GlassesService.displayNames.collectAsStateWithLifecycle()
     var picker by remember { mutableStateOf(false) }
     var touchpad by remember { mutableStateOf(false) }
     var arrange by remember { mutableStateOf(false) }
@@ -63,6 +66,15 @@ fun PanelScreen(ctx: Context, onMirror: () -> Unit) {
 
     LazyColumn(Modifier.fillMaxSize().padding(horizontal = 16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
         item { Spacer(Modifier.height(8.dp)) }
+        if (crash != null) item {
+            Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer)) {
+                Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Text("Perch crashed last time", fontWeight = FontWeight.Bold)
+                    Text(crash!!.lines().take(12).joinToString("\n"), style = MaterialTheme.typography.bodySmall, fontFamily = FontFamily.Monospace)
+                    TextButton({ CrashLog.clear(ctx) }) { Text("Dismiss") }
+                }
+            }
+        }
         // ---- header ----
         item {
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -76,6 +88,7 @@ fun PanelScreen(ctx: Context, onMirror: () -> Unit) {
                         if (attached) "glasses display attached · IMU $hz Hz · ${calLabel(cal)}" else "no glasses display · IMU $hz Hz · ${calLabel(cal)}",
                         style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
+                    if (displayNames.isNotEmpty()) Text("displays: $displayNames", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     Text(
                         if (touchpad) "● TOUCHPAD — moving the cursor on the glasses" else "○ PANEL",
                         color = if (touchpad) Color(0xFF5ADC8C) else Color(0xFFE6BE50), fontWeight = FontWeight.SemiBold,
