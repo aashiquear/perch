@@ -10,6 +10,9 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Computer
+import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -64,8 +67,8 @@ class MainActivity : ComponentActivity() {
                 Scaffold(
                     bottomBar = {
                         NavigationBar {
-                            NavigationBarItem(tab == 0, { tab = 0 }, icon = {}, label = { Text("Host") })
-                            NavigationBarItem(tab == 1, { tab = 1 }, icon = {}, label = { Text("Touchpad") })
+                            NavigationBarItem(tab == 0, { tab = 0 }, icon = { Icon(Icons.Filled.Visibility, null) }, label = { Text("Glasses") })
+                            NavigationBarItem(tab == 1, { tab = 1 }, icon = { Icon(Icons.Filled.Computer, null) }, label = { Text("Laptop remote") })
                         }
                     },
                 ) { pad ->
@@ -94,7 +97,8 @@ class MainActivity : ComponentActivity() {
 
         if (!connected) {
             Column(Modifier.fillMaxSize().padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                Text("Connect to a Perch host", style = MaterialTheme.typography.headlineSmall)
+                Text("Laptop remote", style = MaterialTheme.typography.headlineSmall)
+                Text("Use the phone as a trackpad and keyboard for perchd on your laptop. For the glasses-on-phone touchpad, use the Glasses tab → Touchpad button.", style = MaterialTheme.typography.bodyMedium)
                 if (hosts.isEmpty()) Text("Looking for perchd on this Wi-Fi… (run `perchd` on your laptop)")
                 LazyColumn { items(hosts) { h -> ListItem(headlineContent = { Text(h.name) }, supportingContent = { Text("${h.host}:${h.port}") }, modifier = Modifier.clickable { client.connect(h.host, h.port) }) } }
                 OutlinedTextField(manual, { manual = it }, label = { Text("or host IP") }, singleLine = true)
