@@ -1,4 +1,4 @@
 # ninja log v5
 0	742	1793573346320254163	CMakeFiles/perch_jni.dir/perch_jni.cpp.o	fb0982970fc2251a
-744	765	1793573346348254395	/mnt/extended/projects/perch/apps/android/app/build/intermediates/cxx/Debug/3b6s3d4t/obj/arm64-v8a/libperch_jni.so	45dc617ee9d98c89
 2	20	1793589855589537726	/mnt/extended/projects/perch/apps/android/app/build/intermediates/cxx/Debug/3b6s3d4t/obj/arm64-v8a/libperch_jni.so	45dc617ee9d98c89
+1	16	1793590237007220554	/mnt/extended/projects/perch/apps/android/app/build/intermediates/cxx/Debug/3b6s3d4t/obj/arm64-v8a/libperch_jni.so	565531e22df4182c

@@ -22,9 +22,7 @@
       "abi": "arm64-v8a",
       "artifactName": "perch_jni",
       "output": "/mnt/extended/projects/perch/apps/android/app/build/intermediates/cxx/Debug/3b6s3d4t/obj/arm64-v8a/libperch_jni.so",
-      "runtimeFiles": [
-        "/mnt/extended/projects/perch/apps/android/app/src/main/jniLibs/arm64-v8a/libperch_ffi.so"
-      ]
+      "runtimeFiles": []
     }
   },
   "toolchains": {
