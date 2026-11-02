@@ -76,6 +76,8 @@ class GlassesService : Service() {
         fun stop(ctx: Context) = ctx.stopService(Intent(ctx, GlassesService::class.java))
         fun recenter() { if (tracker != 0L) PerchNative.trackerRecenter(tracker) }
         @Volatile private var instance: GlassesService? = null
+        /** Application context for callers without one (AppWindows.relaunch). */
+        val appContext: Context? get() = instance?.applicationContext
         /** The glasses presentation, once the external display is up. */
         val presentation: GlassesPresentation? get() = instance?.presentation
         /** True while the glasses display is attached. */
@@ -169,7 +171,9 @@ class GlassesService : Service() {
         val usb = getSystemService(USB_SERVICE) as UsbManager
         val dev = usb.deviceList.values.firstOrNull { it.vendorId == ROKID_VID && it.productId == ROKID_PID }
         if (dev == null) {
-            status.value = "waiting for Rokid glasses (USB)"
+            val seen = usb.deviceList.values.joinToString { "%04x:%04x %s".format(it.vendorId, it.productId, it.productName ?: "") }
+            status.value = if (seen.isEmpty()) "waiting for Rokid glasses: no USB devices visible to the phone"
+            else "waiting for Rokid glasses (04d2:162f); USB sees: $seen"
             return
         }
         if (usb.hasPermission(dev)) openDevice(dev)
@@ -190,7 +194,7 @@ class GlassesService : Service() {
         val fd = conn.fileDescriptor
         val handle = PerchNative.glassesOpenFd(fd)
         if (handle == 0L) {
-            status.value = "native open failed (is perch-ffi built with --features rokid?)"
+            status.value = "USB open failed: ${PerchNative.lastError() ?: "unknown native error"}"
             conn.close()
             return
         }

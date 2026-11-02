@@ -52,6 +52,7 @@ class GlassesPresentation(ctx: Context, display: Display) : Presentation(ctx, di
     /** Cursor: which window and where in it (0..1), or null to hide. */
     fun setCursor(index: Int?, u: Float, v: Float) = renderer.setCursor(index, u, v)
     fun pinHere(index: Int) = glView.queueEvent { renderer.pinHere(index) }
+    fun nudgeWindow(index: Int, dDistance: Float, scale: Float) = glView.queueEvent { renderer.nudge(index, dDistance, scale) }
 
     override fun onStop() {
         super.onStop()
@@ -68,6 +69,10 @@ private class Layer(val index: Int, val texId: Int, val surfaceTexture: SurfaceT
     @Volatile var distance = 2f
     @Volatile var anchor = 0
     @Volatile var kind = 0
+    @Volatile var w = 0
+    @Volatile var h = 0
+    @Volatile var widthM = 1f
+    @Volatile var heightM = 1f
 }
 
 class SpatialRenderer(private val panelW: Int, private val panelH: Int) : GLSurfaceView.Renderer {
@@ -120,6 +125,7 @@ class SpatialRenderer(private val panelW: Int, private val panelH: Int) : GLSurf
         val index = PerchNative.spaceUpsert(space, -1, kind, w, h, yaw, pitch, distance, widthM, heightM, anchor)
         val layer = Layer(index, ids[0], st, Surface(st)).also {
             it.yaw = yaw; it.pitch = pitch; it.distance = distance; it.anchor = anchor; it.kind = kind
+            it.w = w; it.h = h; it.widthM = widthM; it.heightM = heightM
         }
         st.setOnFrameAvailableListener { layer.dirty = true }
         layers.add(layer)
@@ -135,7 +141,17 @@ class SpatialRenderer(private val panelW: Int, private val panelH: Int) : GLSurf
     fun resizeWindow(index: Int, w: Int, h: Int, widthM: Float, heightM: Float) {
         val l = layers.firstOrNull { it.index == index } ?: return
         l.surfaceTexture.setDefaultBufferSize(w, h)
+        l.w = w; l.h = h; l.widthM = widthM; l.heightM = heightM
         PerchNative.spaceUpsert(space, index, l.kind, w, h, l.yaw, l.pitch, l.distance, widthM, heightM, l.anchor)
+    }
+
+    /** Move a window nearer/further (metres along its ray) and/or scale it (same as the Linux bar). */
+    fun nudge(index: Int, dDistance: Float, scale: Float) {
+        val l = layers.firstOrNull { it.index == index } ?: return
+        l.distance = (l.distance + dDistance).coerceIn(0.6f, 6f)
+        l.widthM = (l.widthM * scale).coerceIn(0.2f, 6f)
+        l.heightM = (l.heightM * scale).coerceIn(0.2f, 6f)
+        PerchNative.spaceUpsert(space, index, l.kind, l.w, l.h, l.yaw, l.pitch, l.distance, l.widthM, l.heightM, l.anchor)
     }
 
     fun setCursor(index: Int?, u: Float, v: Float) { cursorIndex = index; cursorU = u; cursorV = v }

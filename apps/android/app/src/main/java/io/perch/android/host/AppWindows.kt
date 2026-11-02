@@ -127,6 +127,24 @@ object AppWindows {
         windows.value.map { it.id }.forEach { remove(it) }
     }
 
+    /** Linux bar equivalents: nearer/further step 0.25 m, bigger/smaller ×1.15. */
+    fun nearer(id: Int) = nudge(id, -0.25f, 1f)
+    fun further(id: Int) = nudge(id, 0.25f, 1f)
+    fun bigger(id: Int) = nudge(id, 0f, 1.15f)
+    fun smaller(id: Int) = nudge(id, 0f, 1 / 1.15f)
+    private fun nudge(id: Int, d: Float, s: Float) {
+        windows.value.firstOrNull { it.id == id }?.let { GlassesService.presentation?.nudgeWindow(it.layer, d, s) }
+    }
+
+    /** Bring the app back to the front of its display (after Back left it blank, say). */
+    fun relaunch(id: Int) {
+        val win = windows.value.firstOrNull { it.id == id } ?: return
+        val shell = ShellBridge.shell.value ?: return
+        val launch = runCatching { GlassesService.appContext?.packageManager?.getLaunchIntentForPackage(win.pkg)?.component }.getOrNull() ?: return
+        val err = runCatching { shell.launch(win.displayId, launch.flattenToString()) }.getOrElse { it.toString() }
+        if (err.isNotEmpty()) lastError.value = "relaunch: $err"
+    }
+
     fun pinHere(id: Int) {
         windows.value.firstOrNull { it.id == id }?.let { GlassesService.presentation?.pinHere(it.layer) }
     }

@@ -40,6 +40,8 @@ object PerchNative {
     // --- glasses ---------------------------------------------------------
     external fun glassesOpenFd(fd: Int): Long
     external fun glassesOpenMock(): Long
+    /** Why the last native call on this thread failed (e.g. glassesOpenFd returning 0). */
+    external fun lastError(): String?
     external fun glassesFree(g: Long)
     /** 0 imu (t2 = lo,hi µs; out9 = accel,gyro,mag), 1 button (t2[0]), -1 disconnected. */
     external fun glassesNext(g: Long, t2: IntArray, out9: FloatArray): Int

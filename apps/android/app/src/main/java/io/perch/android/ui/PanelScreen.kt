@@ -15,6 +15,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -179,6 +180,13 @@ fun PanelScreen(ctx: Context, onMirror: () -> Unit) {
                     IconButton({ AppWindows.pinHere(w.id) }) { Icon(Icons.Filled.PushPin, "pin where I look") }
                     IconButton({ AppWindows.remove(w.id) }) { Icon(Icons.Filled.Close, "close") }
                 }
+                if (isFocused) Row(Modifier.padding(start = 6.dp, end = 6.dp, bottom = 4.dp), horizontalArrangement = Arrangement.SpaceEvenly) {
+                    Small(Icons.Filled.ZoomIn, "bigger") { AppWindows.bigger(w.id) }
+                    Small(Icons.Filled.ZoomOut, "smaller") { AppWindows.smaller(w.id) }
+                    Small(Icons.Filled.ArrowDownward, "nearer") { AppWindows.nearer(w.id) }
+                    Small(Icons.Filled.ArrowUpward, "further") { AppWindows.further(w.id) }
+                    Small(Icons.Filled.Refresh, "re-open") { AppWindows.relaunch(w.id) }
+                }
             }
         }
         item { Spacer(Modifier.height(24.dp)) }
@@ -187,6 +195,15 @@ fun PanelScreen(ctx: Context, onMirror: () -> Unit) {
     if (touchpad) TouchpadOverlay(onDismiss = { touchpad = false })
     }
     if (picker) AppPicker(ctx, onPick = { pkg, portrait -> AppWindows.add(ctx, pkg, portrait); picker = false }, onDismiss = { picker = false })
+}
+
+/** Compact icon button with a one-word caption under it. */
+@Composable
+private fun Small(icon: ImageVector, label: String, onClick: () -> Unit) {
+    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+        FilledTonalIconButton(onClick, Modifier.size(40.dp)) { Icon(icon, label) }
+        Text(label, style = MaterialTheme.typography.labelSmall)
+    }
 }
 
 private fun calLabel(c: Int) = when { c == 0 -> "not calibrated"; c == 200 -> "calibrated"; else -> "calibrating $c%" }
@@ -343,10 +360,17 @@ private fun BoxScope.TouchpadOverlay(onDismiss: () -> Unit) {
                     style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedButton({ AppWindows.key(KeyEvent.KEYCODE_BACK) }) { Text("Back") }
-                OutlinedButton({ AppWindows.key(KeyEvent.KEYCODE_HOME) }) { Text("Home") }
-                OutlinedButton({ AppWindows.key(KeyEvent.KEYCODE_APP_SWITCH) }) { Text("Recents") }
+            // Icon row. No Home/Recents: those act on the phone's own display, not the glasses.
+            val fid = focused
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
+                Small(Icons.AutoMirrored.Filled.ArrowBack, "back") { AppWindows.key(KeyEvent.KEYCODE_BACK) }
+                Small(Icons.Filled.SkipNext, "next window") { AppWindows.focusNext(1) }
+                Small(Icons.Filled.ScreenRotation, "rotate") { fid?.let { AppWindows.flip(it) } }
+                Small(Icons.Filled.ZoomIn, "bigger") { fid?.let { AppWindows.bigger(it) } }
+                Small(Icons.Filled.ZoomOut, "smaller") { fid?.let { AppWindows.smaller(it) } }
+                Small(Icons.Filled.ArrowDownward, "nearer") { fid?.let { AppWindows.nearer(it) } }
+                Small(Icons.Filled.ArrowUpward, "further") { fid?.let { AppWindows.further(it) } }
+                Small(Icons.Filled.Refresh, "re-open app") { fid?.let { AppWindows.relaunch(it) } }
             }
         }
     }

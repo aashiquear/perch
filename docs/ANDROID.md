@@ -121,3 +121,16 @@ Sources: AOSP activity launch policy
 (https://source.android.com/docs/core/display/multi_display/activity-launch),
 scrcpy virtual display (`--new-display`, server `VirtualDisplayListener`),
 Shizuku user-service docs.
+
+## Findings from the first on-device round (S24 Ultra, 2026-11-01)
+
+- Trusted display creation, `am start --display` and touch injection all work
+  from the Shizuku helper once it claims package `com.android.shell`.
+- Each app display gets `wm set-ignore-orientation-request true`, so a
+  portrait-locked app on a landscape window is letterboxed (DeX behaviour)
+  instead of rotating the whole display.
+- Home and Recents keys act on the phone's own display, not the window, so the
+  touchpad offers Back, next window, rotate, bigger/smaller, nearer/further and
+  re-open instead.
+- 3DOF needs the real IMU path (Start, not Start (mock)); the mock feeds a
+  still synthetic IMU so windows stay put.

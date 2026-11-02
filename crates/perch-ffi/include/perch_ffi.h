@@ -42,6 +42,8 @@ int  perch_space_load_json(PerchSpace *s, const char *json);
 
 /* ---- glasses (Android USB fd) ----------------------------------------- */
 PerchGlasses *perch_glasses_open_fd(intptr_t fd);
+/* Text of the last error on this thread (e.g. why open_fd returned NULL). */
+int  perch_last_error(char *buf, size_t cap);
 PerchGlasses *perch_glasses_open_mock(void);
 void perch_glasses_free(PerchGlasses *g);
 /* 0 = IMU sample (t2 = [lo,hi] µs, out9 = accel,gyro,mag), 1 = button (t2[0] = id), -1 = disconnected */

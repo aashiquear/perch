@@ -83,7 +83,7 @@ class PerchShellService(private val context: Context) : IPerchShell.Stub() {
     override fun createDisplay(name: String, width: Int, height: Int, dpi: Int, surface: Surface): Int {
         val flags = DisplayManager.VIRTUAL_DISPLAY_FLAG_PUBLIC or
             DisplayManager.VIRTUAL_DISPLAY_FLAG_OWN_CONTENT_ONLY or
-            FLAG_SUPPORTS_TOUCH or FLAG_ROTATES_WITH_CONTENT or FLAG_DESTROY_CONTENT_ON_REMOVAL or
+            FLAG_SUPPORTS_TOUCH or FLAG_DESTROY_CONTENT_ON_REMOVAL or
             FLAG_TRUSTED or FLAG_OWN_DISPLAY_GROUP or FLAG_ALWAYS_UNLOCKED or
             FLAG_TOUCH_FEEDBACK_DISABLED or FLAG_OWN_FOCUS
         return try {
@@ -91,6 +91,9 @@ class PerchShellService(private val context: Context) : IPerchShell.Stub() {
             val id = vd.display.displayId
             displays[id] = vd
             Log.i(TAG, "display $id: $name ${width}x$height@$dpi flags=0x${flags.toString(16)}")
+            // Portrait-locked apps (Instagram…) on a landscape display get letterboxed
+            // instead of the whole display rotating with them. Same as DeX.
+            sh("wm", "set-ignore-orientation-request", "true", "-d", id.toString())
             id
         } catch (e: Throwable) {
             Log.e(TAG, "createVirtualDisplay failed: $e")
@@ -111,6 +114,12 @@ class PerchShellService(private val context: Context) : IPerchShell.Stub() {
     override fun releaseDisplay(displayId: Int) {
         displays.remove(displayId)?.release()
     }
+
+    private fun sh(vararg cmd: String): String = try {
+        val p = ProcessBuilder(*cmd).redirectErrorStream(true).start()
+        val out = BufferedReader(InputStreamReader(p.inputStream)).readText()
+        p.waitFor(); out.trim()
+    } catch (e: Throwable) { "${cmd[0]} failed: $e" }
 
     override fun launch(displayId: Int, component: String): String {
         // `am` is what adb shell uses; as uid shell it may target any display.

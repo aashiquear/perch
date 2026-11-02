@@ -124,6 +124,15 @@ Java_io_perch_android_native_PerchNative_glassesOpenFd(JNIEnv *, jobject, jint f
     return reinterpret_cast<jlong>(g);
 }
 
+JNIEXPORT jstring JNICALL
+Java_io_perch_android_native_PerchNative_lastError(JNIEnv *env, jobject) {
+    std::vector<char> buf(512);
+    int n = perch_last_error(buf.data(), buf.size());
+    if (n <= 0) return nullptr;
+    if ((size_t) n + 1 > buf.size()) { buf.resize(n + 1); perch_last_error(buf.data(), buf.size()); }
+    return env->NewStringUTF(buf.data());
+}
+
 JNIEXPORT jlong JNICALL
 Java_io_perch_android_native_PerchNative_glassesOpenMock(JNIEnv *, jobject) {
     return reinterpret_cast<jlong>(perch_glasses_open_mock());

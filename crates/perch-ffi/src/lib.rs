@@ -155,6 +155,21 @@ unsafe fn write_pose(p: &Pose, out8: *mut f32) {
     o[7] = p.confidence;
 }
 
+thread_local! {
+    static LAST_ERROR: std::cell::RefCell<String> = const { std::cell::RefCell::new(String::new()) };
+}
+
+fn set_last_error(msg: &str) {
+    LAST_ERROR.with(|e| *e.borrow_mut() = msg.to_string());
+}
+
+/// Copy the text of the last error on this thread (from `perch_glasses_open_fd`)
+/// into `buf`; same contract as `perch_tracker_calibration_json`.
+#[no_mangle]
+pub unsafe extern "C" fn perch_last_error(buf: *mut c_char, cap: usize) -> c_int {
+    LAST_ERROR.with(|e| copy_str(&e.borrow(), buf, cap))
+}
+
 unsafe fn copy_str(s: &str, buf: *mut c_char, cap: usize) -> c_int {
     let need = s.len();
     if !buf.is_null() && need < cap {
@@ -399,12 +414,16 @@ pub extern "C" fn perch_glasses_open_fd(fd: isize) -> *mut PerchGlasses {
     {
         match perch_hal::rokid::RokidGlasses::open_fd(fd) {
             Ok(g) => return Box::into_raw(Box::new(PerchGlasses(Box::new(g)))),
-            Err(_) => return std::ptr::null_mut(),
+            Err(e) => {
+                set_last_error(&e.to_string());
+                return std::ptr::null_mut();
+            }
         }
     }
     #[allow(unreachable_code)]
     {
         let _ = fd;
+        set_last_error("perch-ffi built without the `rokid` feature or not for Android");
         std::ptr::null_mut()
     }
 }
