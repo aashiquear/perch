@@ -28,6 +28,8 @@ interface IPerchShell {
     boolean injectKeyEvent(int displayId, in KeyEvent event) = 9;
     /** Remove every task on the display (so the app leaves Recents); falls back to force-stop when the app has no task elsewhere. Returns a note. */
     String closeApp(int displayId, String pkg) = 10;
+    /** True if a window on the display has FLAG_SECURE (shows black on virtual displays). */
+    boolean isSecure(int displayId) = 11;
     /** Shizuku convention: tear the service down. */
     void destroy() = 16777114;
 }

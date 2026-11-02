@@ -20,6 +20,9 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.lifecycleScope
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.launch
 import io.perch.android.host.AppWindows
 import io.perch.android.host.GlassesService
 import io.perch.android.host.MirrorSource
@@ -62,6 +65,10 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         if (Build.VERSION.SDK_INT >= 33) requestPermissions(arrayOf(android.Manifest.permission.POST_NOTIFICATIONS), 1)
         ShellBridge.install()
+        window.decorView.setOnCapturedPointerListener { _, ev -> AppWindows.capturedMotion(ev) }
+        lifecycleScope.launch {
+            combine(AppWindows.routeHardware, AppWindows.focused) { r, f -> r to f }.collect { updatePointerCapture() }
+        }
         setContent {
             PerchTheme {
                 var tab by rememberSaveable { mutableIntStateOf(0) }
@@ -88,6 +95,20 @@ class MainActivity : ComponentActivity() {
 
     override fun dispatchGenericMotionEvent(ev: android.view.MotionEvent): Boolean =
         AppWindows.hardwareMotion(ev) || super.dispatchGenericMotionEvent(ev)
+
+    // Mouse: pointer capture hides the phone's pointer and hands us relative motion,
+    // so a Bluetooth mouse drives only the glasses cursor and never clicks the panel.
+    private fun updatePointerCapture() {
+        val want = AppWindows.routeHardware.value && AppWindows.focused.value != null && hasWindowFocus()
+        val v = window.decorView
+        if (want && !v.hasPointerCapture()) v.requestPointerCapture()
+        else if (!want && v.hasPointerCapture()) v.releasePointerCapture()
+    }
+
+    override fun onWindowFocusChanged(hasFocus: Boolean) {
+        super.onWindowFocusChanged(hasFocus)
+        updatePointerCapture()
+    }
 
     @Composable
     private fun HostScreen() {

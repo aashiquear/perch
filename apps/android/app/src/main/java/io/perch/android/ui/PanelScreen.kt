@@ -142,7 +142,7 @@ fun PanelScreen(ctx: Context, onMirror: () -> Unit) {
             }
         }
         item {
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            FlowRow(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                 if (GlassesService.tracker == 0L) {
                     Button({ GlassesService.start(ctx) }) { Text("Start") }
                     OutlinedButton({ GlassesService.start(ctx, useMock = true) }) { Text("Start (mock)") }
@@ -157,7 +157,7 @@ fun PanelScreen(ctx: Context, onMirror: () -> Unit) {
                 Switch(routeHw, { AppWindows.routeHardware.value = it })
                 Column {
                     Text("Bluetooth keyboard · mouse · gamepad → glasses", fontWeight = FontWeight.SemiBold)
-                    Text("while Perch is open, hardware input goes to the focused window", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text("while Perch is open, hardware input goes to the focused window; the mouse pointer is captured (hidden on the phone). Turn off to use the mouse here.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
             }
         }
@@ -189,6 +189,7 @@ fun PanelScreen(ctx: Context, onMirror: () -> Unit) {
                     Column(Modifier.weight(1f)) {
                         Text((if (isFocused) "● " else "○ ") + w.label, fontWeight = FontWeight.SemiBold)
                         Text(if (w.portrait) "portrait ${w.width}×${w.height}" else "landscape ${w.width}×${w.height}", style = MaterialTheme.typography.bodySmall)
+                        if (w.secure) Text("blank on the glasses: this app blocks screen projection (FLAG_SECURE)", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
                     }
                     IconButton({ AppWindows.flip(w.id) }) { Icon(Icons.Filled.ScreenRotation, "portrait / landscape") }
                     IconButton({ AppWindows.pinHere(w.id) }) { Icon(Icons.Filled.PushPin, "pin where I look") }
@@ -399,13 +400,13 @@ private class PhoneTouchpad {
     private var lastX = 0f; private var lastY = 0f
     private var downT = 0L; private var lastTapT = 0L
     private var maxFingers = 0; private var moved = false; private var dragging = false
-    private var scrollAcc = 0f; private var threeStartX = 0f
+    private var scrollAcc = 0f; private var scrollAccX = 0f; private var threeStartX = 0f
     private val gain = 2.2f
 
     fun onTouch(e: MotionEvent): Boolean {
         when (e.actionMasked) {
             MotionEvent.ACTION_DOWN -> {
-                lastX = e.x; lastY = e.y; downT = SystemClock.uptimeMillis(); maxFingers = 1; moved = false; scrollAcc = 0f
+                lastX = e.x; lastY = e.y; downT = SystemClock.uptimeMillis(); maxFingers = 1; moved = false; scrollAcc = 0f; scrollAccX = 0f
                 if (downT - lastTapT < 250) { dragging = true; AppWindows.pressDown() }
             }
             MotionEvent.ACTION_POINTER_DOWN -> {
@@ -419,7 +420,11 @@ private class PhoneTouchpad {
                 if (abs(dx) + abs(dy) > 2f) moved = true
                 when (e.pointerCount) {
                     1 -> { val a = 1f + (abs(dx) + abs(dy)) / 40f; AppWindows.cursorMove(dx * gain * a, dy * gain * a) }
-                    2 -> { scrollAcc += dy; if (abs(scrollAcc) > 24f) { AppWindows.scroll(if (scrollAcc > 0) 1f else -1f); scrollAcc = 0f } }
+                    2 -> {
+                        scrollAcc += dy; scrollAccX += dx
+                        if (abs(scrollAcc) > 24f) { AppWindows.scroll(0f, if (scrollAcc > 0) 1f else -1f); scrollAcc = 0f }
+                        if (abs(scrollAccX) > 24f) { AppWindows.scroll(if (scrollAccX > 0) 1f else -1f, 0f); scrollAccX = 0f }
+                    }
                 }
             }
             MotionEvent.ACTION_UP -> {

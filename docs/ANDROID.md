@@ -134,3 +134,11 @@ Shizuku user-service docs.
   re-open instead.
 - 3DOF needs the real IMU path (Start, not Start (mock)); the mock feeds a
   still synthetic IMU so windows stay put.
+- Apps that set `FLAG_SECURE` (banking, DRM video) render black on every
+  virtual display that is not itself secure, and a secure virtual display
+  needs `CAPTURE_SECURE_VIDEO_OUTPUT`, a signature permission the shell uid
+  does not hold. Perch checks the display's windows 3 s after launch
+  (`isSecure`, via `dumpsys window`) and labels the card instead.
+- A Bluetooth mouse uses pointer capture on the panel (`requestPointerCapture`):
+  the phone's pointer disappears and relative motion drives the glasses
+  cursor, so clicks never land on the panel. The panel switch releases it.

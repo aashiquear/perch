@@ -157,6 +157,25 @@ class PerchShellService(private val context: Context) : IPerchShell.Stub() {
         return notes.joinToString("; ")
     }
 
+    /**
+     * `dumpsys window windows` prints each window with its display and its
+     * layout flags: either hex (`fl=81810100`, FLAG_SECURE = 0x2000) or on
+     * newer releases a symbolic list containing `SECURE`.
+     */
+    override fun isSecure(displayId: Int): Boolean {
+        val out = sh("dumpsys", "window", "windows")
+        var onDisplay = false
+        for (line in out.lines()) {
+            if (line.contains("Window #") || line.contains("Window{")) onDisplay = false
+            Regex("mDisplayId=(\\d+)").find(line)?.let { onDisplay = it.groupValues[1].toInt() == displayId }
+            if (!onDisplay) continue
+            val fl = Regex("\\bfl=([0-9a-fA-F]+)").find(line)?.groupValues?.get(1)
+            if (fl != null && (fl.toLongOrNull(16) ?: 0L) and 0x2000L != 0L) return true
+            if (Regex("\\bfl=\\{?[^}]*\\bSECURE\\b").containsMatchIn(line)) return true
+        }
+        return false
+    }
+
     override fun launch(displayId: Int, component: String): String {
         // `am` is what adb shell uses; as uid shell it may target any display.
         val cmd = listOf(

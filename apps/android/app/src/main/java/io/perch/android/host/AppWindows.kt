@@ -35,6 +35,8 @@ object AppWindows {
         /** Renderer layer index. */
         val layer: Int,
         val portrait: Boolean,
+        /** The app set FLAG_SECURE: the display shows black. Nothing a non-system app can do about it. */
+        val secure: Boolean = false,
     ) {
         val width: Int get() = if (portrait) PORTRAIT_W else PORTRAIT_H
         val height: Int get() = if (portrait) PORTRAIT_H else PORTRAIT_W
@@ -86,6 +88,8 @@ object AppWindows {
             val win = Win(nextId++, pkg, label, icon, displayId, layer, portrait)
             windows.value = windows.value + win
             focus(win.id)
+            // Secure (DRM/banking) apps render black on any non-secure display; tell the user.
+            android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({ checkSecure(win.id) }, 3000)
         }
     }
 
@@ -185,8 +189,8 @@ object AppWindows {
     fun pressDown() { dragging = true; touch(MotionEvent.ACTION_DOWN) }
     fun pressUp() { if (dragging) { dragging = false; touch(MotionEvent.ACTION_UP) } }
 
-    /** Two-finger scroll → mouse wheel at the cursor (lines, positive = up). */
-    fun scroll(dy: Float) {
+    /** Two-finger scroll → mouse wheel at the cursor (lines; dy positive = up, dx positive = right). */
+    fun scroll(dx: Float, dy: Float) {
         val w = focusedWin() ?: return
         val shell = ShellBridge.shell.value ?: return
         val now = SystemClock.uptimeMillis()
@@ -194,6 +198,7 @@ object AppWindows {
         val coords = arrayOf(MotionEvent.PointerCoords().apply {
             x = cursorU * w.width; y = cursorV * w.height
             setAxisValue(MotionEvent.AXIS_VSCROLL, dy)
+            setAxisValue(MotionEvent.AXIS_HSCROLL, dx)
         })
         val ev = MotionEvent.obtain(now, now, MotionEvent.ACTION_SCROLL, 1, props, coords, 0, 0, 1f, 1f, 0, 0, InputDevice.SOURCE_MOUSE, 0)
         runCatching { shell.injectMotion(w.displayId, ev) }
@@ -223,24 +228,32 @@ object AppWindows {
             val ok = runCatching { shell.injectMotion(w.displayId, copy) }.getOrDefault(false)
             copy.recycle(); return ok
         }
-        if (src and InputDevice.SOURCE_MOUSE != InputDevice.SOURCE_MOUSE) return false
+        // A mouse is handled through pointer capture (see MainActivity): the phone's
+        // pointer is hidden and we get relative motion, so nothing lands on the panel.
+        return false
+    }
+
+    /** Captured-pointer event (SOURCE_MOUSE_RELATIVE): x/y are deltas. */
+    fun capturedMotion(ev: MotionEvent): Boolean {
+        if (focusedWin() == null) return false
         when (ev.actionMasked) {
-            MotionEvent.ACTION_HOVER_MOVE, MotionEvent.ACTION_MOVE -> {
-                val dx = ev.getAxisValue(MotionEvent.AXIS_RELATIVE_X).takeIf { it != 0f } ?: (ev.x - mouseX)
-                val dy = ev.getAxisValue(MotionEvent.AXIS_RELATIVE_Y).takeIf { it != 0f } ?: (ev.y - mouseY)
-                mouseX = ev.x; mouseY = ev.y
-                if (mouseSeen) cursorMove(dx * 1.5f, dy * 1.5f)
-                mouseSeen = true
-            }
-            MotionEvent.ACTION_HOVER_ENTER, MotionEvent.ACTION_HOVER_EXIT -> { mouseX = ev.x; mouseY = ev.y; mouseSeen = ev.actionMasked == MotionEvent.ACTION_HOVER_ENTER }
-            MotionEvent.ACTION_BUTTON_PRESS, MotionEvent.ACTION_DOWN -> pressDown()
-            MotionEvent.ACTION_BUTTON_RELEASE, MotionEvent.ACTION_UP -> pressUp()
-            MotionEvent.ACTION_SCROLL -> scroll(ev.getAxisValue(MotionEvent.AXIS_VSCROLL))
-            else -> return false
+            MotionEvent.ACTION_MOVE -> cursorMove(ev.x * 1.5f, ev.y * 1.5f)
+            MotionEvent.ACTION_BUTTON_PRESS -> pressDown()
+            MotionEvent.ACTION_BUTTON_RELEASE -> pressUp()
+            MotionEvent.ACTION_SCROLL -> scroll(ev.getAxisValue(MotionEvent.AXIS_HSCROLL), ev.getAxisValue(MotionEvent.AXIS_VSCROLL))
+            else -> {}
         }
         return true
     }
-    private var mouseX = 0f; private var mouseY = 0f; private var mouseSeen = false
+
+    /** Ask the helper whether the app on this display refuses projection; label the card if so. */
+    fun checkSecure(id: Int) {
+        val win = windows.value.firstOrNull { it.id == id } ?: return
+        val shell = ShellBridge.shell.value ?: return
+        val secure = runCatching { shell.isSecure(win.displayId) }.getOrDefault(false)
+        if (secure != win.secure) windows.value = windows.value.map { if (it.id == id) it.copy(secure = secure) else it }
+        if (secure) lastError.value = "${win.label} blocks screen projection (FLAG_SECURE) and shows black on the glasses"
+    }
 
     /** Back key etc. to the focused app. */
     fun key(keyCode: Int) {
