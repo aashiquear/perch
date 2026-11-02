@@ -73,7 +73,8 @@ object AppWindows {
         svc.addWindow(PerchNative.SOURCE_VIRTUAL, w, h, yaw, 0f, 2f, wm, hm, PerchNative.ANCHOR_WORLD) { layer, surface: Surface ->
             val displayId = try { shell.createDisplay("perch-$pkg", w, h, DPI, surface) } catch (e: Throwable) { -1 }
             if (displayId < 0) {
-                lastError.value = "could not create a glasses display (is Shizuku running as shell?)"
+                val why = runCatching { shell.lastError() }.getOrNull().orEmpty()
+                lastError.value = "could not create a glasses display: " + why.ifEmpty { "(is Shizuku running as shell?)" }
                 svc.hideWindow(layer)
                 return@addWindow
             }

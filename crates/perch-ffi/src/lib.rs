@@ -413,7 +413,7 @@ pub extern "C" fn perch_glasses_open_fd(fd: isize) -> *mut PerchGlasses {
 #[no_mangle]
 pub extern "C" fn perch_glasses_open_mock() -> *mut PerchGlasses {
     Box::into_raw(Box::new(PerchGlasses(Box::new(
-        perch_hal::mock::MockGlasses::synthetic(1.0, 3600.0, 0.0),
+        perch_hal::mock::MockGlasses::synthetic(1.0, 3600.0, 0.0).realtime(true),
     ))))
 }
 

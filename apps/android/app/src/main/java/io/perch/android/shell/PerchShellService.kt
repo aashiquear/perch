@@ -1,6 +1,8 @@
 package io.perch.android.shell
 
+import android.content.AttributionSource
 import android.content.Context
+import android.content.ContextWrapper
 import android.hardware.display.DisplayManager
 import android.hardware.display.VirtualDisplay
 import android.os.Build
@@ -43,7 +45,32 @@ class PerchShellService(private val context: Context) : IPerchShell.Stub() {
     }
 
     private val displays = HashMap<Int, VirtualDisplay>()
-    private val dm: DisplayManager by lazy { context.getSystemService(Context.DISPLAY_SERVICE) as DisplayManager }
+    @Volatile private var lastError = ""
+
+    /**
+     * System services check that the package name matches the calling uid.
+     * Shizuku hands us a system context whose package is "android", which uid
+     * 2000 does not own, so DisplayManager would throw "packageName must match
+     * the calling uid". Same trick as scrcpy's FakeContext: claim com.android.shell.
+     */
+    private class ShellContext(base: Context) : ContextWrapper(base) {
+        override fun getPackageName() = "com.android.shell"
+        override fun getOpPackageName() = "com.android.shell"
+        override fun getAttributionSource(): AttributionSource =
+            AttributionSource.Builder(Process.myUid()).setPackageName("com.android.shell").build()
+    }
+
+    private val shellContext by lazy { ShellContext(context) }
+    private val dm: DisplayManager by lazy {
+        // Hidden ctor DisplayManager(Context) binds the manager to our shell context;
+        // getSystemService on a wrapper would use the base context's package instead.
+        try {
+            HiddenApiBypass.newInstance(DisplayManager::class.java, shellContext) as DisplayManager
+        } catch (e: Throwable) {
+            Log.w(TAG, "DisplayManager(Context) ctor unavailable: $e")
+            shellContext.getSystemService(Context.DISPLAY_SERVICE) as DisplayManager
+        }
+    }
 
     init {
         if (Build.VERSION.SDK_INT >= 28) HiddenApiBypass.addHiddenApiExemptions("")
@@ -51,6 +78,7 @@ class PerchShellService(private val context: Context) : IPerchShell.Stub() {
     }
 
     override fun uid(): Int = Process.myUid()
+    override fun lastError(): String = lastError
 
     override fun createDisplay(name: String, width: Int, height: Int, dpi: Int, surface: Surface): Int {
         val flags = DisplayManager.VIRTUAL_DISPLAY_FLAG_PUBLIC or
@@ -66,8 +94,7 @@ class PerchShellService(private val context: Context) : IPerchShell.Stub() {
             id
         } catch (e: Throwable) {
             Log.e(TAG, "createVirtualDisplay failed: $e")
-            // Without TRUSTED (e.g. a build that lacks the permission for shell) fall
-            // back to a plain public display so the user at least sees the failure mode.
+            lastError = "createVirtualDisplay: $e"
             -1
         }
     }
@@ -77,7 +104,7 @@ class PerchShellService(private val context: Context) : IPerchShell.Stub() {
         return try {
             vd.resize(width, height, dpi); true
         } catch (e: Throwable) {
-            Log.e(TAG, "resize: $e"); false
+            Log.e(TAG, "resize: $e"); lastError = "resize: $e"; false
         }
     }
 
@@ -95,7 +122,7 @@ class PerchShellService(private val context: Context) : IPerchShell.Stub() {
             val p = ProcessBuilder(cmd).redirectErrorStream(true).start()
             val out = BufferedReader(InputStreamReader(p.inputStream)).readText()
             p.waitFor()
-            if (p.exitValue() == 0 && !out.contains("Error")) "" else out.trim()
+            if (p.exitValue() == 0 && !out.contains("Error")) "" else out.trim().also { lastError = "am start: $it" }
         } catch (e: Throwable) {
             "am start failed: $e"
         }
@@ -104,7 +131,7 @@ class PerchShellService(private val context: Context) : IPerchShell.Stub() {
     private val inputManager: Any? by lazy {
         try {
             val cls = Class.forName("android.hardware.input.InputManager")
-            if (Build.VERSION.SDK_INT >= 34) context.getSystemService(Context.INPUT_SERVICE)
+            if (Build.VERSION.SDK_INT >= 34) shellContext.getSystemService(Context.INPUT_SERVICE)
             else cls.getMethod("getInstance").invoke(null)
         } catch (e: Throwable) {
             Log.e(TAG, "InputManager: $e"); null
@@ -117,7 +144,7 @@ class PerchShellService(private val context: Context) : IPerchShell.Stub() {
             HiddenApiBypass.invoke(InputEvent::class.java, event, "setDisplayId", displayId)
             HiddenApiBypass.invoke(im.javaClass, im, "injectInputEvent", event, INJECT_MODE_ASYNC) as Boolean
         } catch (e: Throwable) {
-            Log.e(TAG, "inject: $e"); false
+            Log.e(TAG, "inject: $e"); lastError = "inject: $e"; false
         }
     }
 

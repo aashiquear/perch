@@ -21,6 +21,8 @@ interface IPerchShell {
     boolean injectKey(int displayId, int keyCode, boolean down, int metaState) = 6;
     /** uid the service runs as (2000 = shell), for the panel's status line. */
     int uid() = 7;
+    /** Why the last call failed (exception text), for the panel. */
+    String lastError() = 8;
     /** Shizuku convention: tear the service down. */
     void destroy() = 16777114;
 }
