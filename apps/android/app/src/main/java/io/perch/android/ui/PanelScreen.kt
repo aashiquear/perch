@@ -64,6 +64,7 @@ fun PanelScreen(ctx: Context, onMirror: () -> Unit) {
 
     LaunchedEffect(Unit) { ShellBridge.refresh() }
 
+    Box(Modifier.fillMaxSize()) {
     LazyColumn(Modifier.fillMaxSize().padding(horizontal = 16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
         item { Spacer(Modifier.height(8.dp)) }
         if (crash != null) item {
@@ -183,8 +184,9 @@ fun PanelScreen(ctx: Context, onMirror: () -> Unit) {
         item { Spacer(Modifier.height(24.dp)) }
     }
 
+    if (touchpad) TouchpadOverlay(onDismiss = { touchpad = false })
+    }
     if (picker) AppPicker(ctx, onPick = { pkg, portrait -> AppWindows.add(ctx, pkg, portrait); picker = false }, onDismiss = { picker = false })
-    if (touchpad) TouchpadSheet(onDismiss = { touchpad = false })
 }
 
 private fun calLabel(c: Int) = when { c == 0 -> "not calibrated"; c == 200 -> "calibrated"; else -> "calibrating $c%" }
@@ -305,21 +307,33 @@ private fun AppPicker(ctx: Context, onPick: (String, Boolean) -> Unit, onDismiss
  * hold = drag, two fingers = scroll, three-finger swipe = next/previous
  * window. The phone is the trackpad; the cursor is drawn on the glasses.
  */
-@OptIn(ExperimentalMaterial3Api::class, ExperimentalComposeUiApi::class)
+/**
+ * Docked at the bottom of the panel, not a ModalBottomSheet: the sheet's own
+ * drag-to-dismiss swallowed vertical finger movement before the pad saw it.
+ */
+@OptIn(ExperimentalComposeUiApi::class)
 @Composable
-private fun TouchpadSheet(onDismiss: () -> Unit) {
+private fun BoxScope.TouchpadOverlay(onDismiss: () -> Unit) {
     val focused by AppWindows.focused.collectAsStateWithLifecycle()
     val windows by AppWindows.windows.collectAsStateWithLifecycle()
-    ModalBottomSheet(onDismissRequest = onDismiss) {
-        Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp).padding(bottom = 24.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+    // Scrim: tap outside the pad to close.
+    Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.35f)).clickable(onClick = onDismiss))
+    Surface(
+        Modifier.align(Alignment.BottomCenter).fillMaxWidth(),
+        shape = RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp), tonalElevation = 3.dp, shadowElevation = 8.dp,
+    ) {
+        Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp).padding(top = 12.dp, bottom = 24.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
-                windows.forEach { w ->
-                    FilterChip(selected = focused == w.id, onClick = { AppWindows.focus(w.id) }, label = { Text(w.label) })
+                Row(Modifier.weight(1f), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    windows.forEach { w ->
+                        FilterChip(selected = focused == w.id, onClick = { AppWindows.focus(w.id) }, label = { Text(w.label) })
+                    }
                 }
+                IconButton(onDismiss) { Icon(Icons.Filled.Close, "close touchpad") }
             }
             val gestures = remember { PhoneTouchpad() }
             Box(
-                Modifier.fillMaxWidth().height(320.dp).clip(RoundedCornerShape(16.dp))
+                Modifier.fillMaxWidth().height(360.dp).clip(RoundedCornerShape(16.dp))
                     .background(MaterialTheme.colorScheme.surfaceVariant)
                     .pointerInteropFilter { gestures.onTouch(it) },
                 contentAlignment = Alignment.Center,
