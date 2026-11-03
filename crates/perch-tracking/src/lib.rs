@@ -94,10 +94,37 @@ pub struct TrackerConfig {
     /// default is deliberately loose; real head motion is tens of °/s.
     #[serde(default = "default_calib_max_rate_deg_s")]
     pub calib_max_rate_deg_s: f32,
+    /// Keep learning the gyro bias whenever the glasses are still (gravity
+    /// cannot observe yaw bias, and the bias wanders with temperature after a
+    /// one-off calibration). Off = only the explicit calibration applies.
+    #[serde(default = "default_true")]
+    pub auto_bias: bool,
+    /// A sample counts as "still" if |gyro − bias| is below this (deg/s) and
+    /// the accelerometer reads ≈ g.
+    #[serde(default = "default_auto_bias_max_rate_deg_s")]
+    pub auto_bias_max_rate_deg_s: f32,
+    /// Seconds of uninterrupted stillness before one bias update.
+    #[serde(default = "default_auto_bias_window_s")]
+    pub auto_bias_window_s: f32,
+    /// Time constant (seconds) of the bias update; larger = slower, safer.
+    #[serde(default = "default_auto_bias_tau_s")]
+    pub auto_bias_tau_s: f32,
 }
 
 fn default_calib_max_rate_deg_s() -> f32 {
     5.0
+}
+fn default_true() -> bool {
+    true
+}
+fn default_auto_bias_max_rate_deg_s() -> f32 {
+    1.5
+}
+fn default_auto_bias_window_s() -> f32 {
+    2.0
+}
+fn default_auto_bias_tau_s() -> f32 {
+    15.0
 }
 
 impl Default for TrackerConfig {
@@ -111,6 +138,10 @@ impl Default for TrackerConfig {
             max_dt: 0.1,
             base_latency_s: 0.013,
             calib_max_rate_deg_s: default_calib_max_rate_deg_s(),
+            auto_bias: default_true(),
+            auto_bias_max_rate_deg_s: default_auto_bias_max_rate_deg_s(),
+            auto_bias_window_s: default_auto_bias_window_s(),
+            auto_bias_tau_s: default_auto_bias_tau_s(),
         }
     }
 }
@@ -127,11 +158,20 @@ struct CalibRun {
     max_rate: f32,
 }
 
+/// Running window of raw gyro samples while the glasses look still.
+#[derive(Debug, Clone, Default)]
+struct StillWindow {
+    start_us: Option<u64>,
+    sum: Vector3<f64>,
+    n: u32,
+}
+
 /// The tracker. One per connected glasses.
 #[derive(Debug, Clone)]
 pub struct Tracker {
     cfg: TrackerConfig,
     cal: Calibration,
+    still: StillWindow,
     /// Head → world (before re-centre offset).
     q: UnitQuaternion<f32>,
     /// Mahony integral error term (acts as bias estimate delta).
@@ -159,6 +199,7 @@ impl Tracker {
         Self {
             cfg,
             cal,
+            still: StillWindow::default(),
             q: UnitQuaternion::identity(),
             integral: Vector3::zeros(),
             yaw_offset: UnitQuaternion::identity(),
@@ -261,6 +302,10 @@ impl Tracker {
             }
         }
 
+        if self.cfg.auto_bias && self.calib.is_none() {
+            self.learn_bias_when_still(&s);
+        }
+
         let gyro = s.gyro - self.cal.gyro_bias;
         let accel = s.accel * self.cal.accel_scale;
 
@@ -321,6 +366,34 @@ impl Tracker {
         // --- Integrate ------------------------------------------------
         self.q = integrate(&self.q, &omega, dt);
         self.output(s.t_us, gyro)
+    }
+
+    /// Online bias refinement: while every sample in a window of
+    /// `auto_bias_window_s` is below the stillness threshold (with gravity
+    /// alone on the accelerometer), move the bias toward the window's mean
+    /// raw gyro with time constant `auto_bias_tau_s`. Motion resets the window.
+    fn learn_bias_when_still(&mut self, s: &ImuSample) {
+        let thresh = self.cfg.auto_bias_max_rate_deg_s.to_radians();
+        let still = (s.gyro - self.cal.gyro_bias).norm() < thresh
+            && ((s.accel.norm() * self.cal.accel_scale - G) / G).abs() < self.cfg.accel_gate;
+        if !still {
+            self.still = StillWindow::default();
+            return;
+        }
+        let w = &mut self.still;
+        let start = *w.start_us.get_or_insert(s.t_us);
+        w.sum += s.gyro.cast::<f64>();
+        w.n += 1;
+        let elapsed_s = s.t_us.saturating_sub(start) as f32 * 1e-6;
+        if elapsed_s >= self.cfg.auto_bias_window_s && w.n >= 50 {
+            let mean = (w.sum / w.n as f64).cast::<f32>();
+            let alpha = (elapsed_s / self.cfg.auto_bias_tau_s.max(elapsed_s)).min(1.0);
+            self.cal.gyro_bias += (mean - self.cal.gyro_bias) * alpha;
+            if self.cal.samples == 0 {
+                self.cal.samples = w.n;
+            }
+            self.still = StillWindow::default();
+        }
     }
 
     /// Pose predicted `extra_s` seconds ahead (plus `base_latency_s`) by
@@ -496,6 +569,33 @@ mod tests {
         }
         assert_eq!(t.calibration_state(), CalibrationState::Uncalibrated);
         assert_eq!(t.calibration().samples, 0);
+    }
+
+    /// Without any explicit calibration, a biased-but-still IMU must stop
+    /// drifting once the online bias learner has had a minute of stillness.
+    #[test]
+    fn auto_bias_removes_yaw_drift_while_still() {
+        let bias = Vector3::new(-0.0009, 0.0035, -0.0001); // the S24 run's real bias
+        let mut t = Tracker::new(TrackerConfig::default(), Calibration::none());
+        // Uncorrected drift rate over the first 10 s.
+        let mut p = t.feed(still_sample(0, bias));
+        let y0 = world_yaw(&p.orientation);
+        for i in 1..(10 * 444) {
+            p = t.feed(still_sample(i as u64 * 2250, bias));
+        }
+        let early_rate = (world_yaw(&p.orientation) - y0).abs() / 10.0;
+        // Let it learn for 60 s.
+        for i in (10 * 444)..(70 * 444) {
+            p = t.feed(still_sample(i as u64 * 2250, bias));
+        }
+        let y1 = world_yaw(&p.orientation);
+        for i in (70 * 444)..(80 * 444) {
+            p = t.feed(still_sample(i as u64 * 2250, bias));
+        }
+        let late_rate = (world_yaw(&p.orientation) - y1).abs() / 10.0;
+        assert!(early_rate > 1e-3, "test needs a visible uncorrected drift, got {early_rate}");
+        assert!(late_rate < early_rate * 0.05, "drift {late_rate} rad/s should be < 5% of {early_rate}");
+        assert!((t.calibration().gyro_bias - bias).norm() < 2e-4);
     }
 
     /// Measured on a Rokid Max resting on a desk (2026-10-31): visibly still,
