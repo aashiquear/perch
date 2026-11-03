@@ -593,8 +593,14 @@ mod tests {
             p = t.feed(still_sample(i as u64 * 2250, bias));
         }
         let late_rate = (world_yaw(&p.orientation) - y1).abs() / 10.0;
-        assert!(early_rate > 1e-3, "test needs a visible uncorrected drift, got {early_rate}");
-        assert!(late_rate < early_rate * 0.05, "drift {late_rate} rad/s should be < 5% of {early_rate}");
+        assert!(
+            early_rate > 1e-3,
+            "test needs a visible uncorrected drift, got {early_rate}"
+        );
+        assert!(
+            late_rate < early_rate * 0.05,
+            "drift {late_rate} rad/s should be < 5% of {early_rate}"
+        );
         assert!((t.calibration().gyro_bias - bias).norm() < 2e-4);
     }
 
