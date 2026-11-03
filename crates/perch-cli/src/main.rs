@@ -342,7 +342,8 @@ async fn main() -> anyhow::Result<()> {
             for w in &state.windows {
                 c.send(Message::Command(Command::RemoveWindow { id: w.id }));
             }
-            let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
+            // Each release re-lays out the desktop (~1 s on GNOME): wait per window.
+            let deadline = tokio::time::Instant::now() + Duration::from_secs(2 * n as u64 + 2);
             let mut removed = 0;
             while removed < n {
                 match tokio::time::timeout_at(deadline, c.recv()).await {

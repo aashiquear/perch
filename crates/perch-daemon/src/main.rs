@@ -58,7 +58,7 @@ fn main() -> anyhow::Result<()> {
         .clone()
         .map(Paths::at)
         .unwrap_or_else(Paths::default_paths);
-    let cfg = paths.load_config()?;
+    let mut cfg = paths.load_config()?;
     tracing::info!(name = %cfg.name, peer = %cfg.peer_id, dir = %paths.dir.display(), "perchd starting");
 
     let optics = DisplayOptics {
@@ -89,6 +89,14 @@ fn main() -> anyhow::Result<()> {
         optics,
         Some(paths.clone()),
     )));
+    // `display.monitor_name` may be a connector ("DP-5") or part of the monitor's
+    // description ("Rokid", the default): resolve it to the connector GNOME uses.
+    if let Some(conn) = resolve_connector(&cfg.display.monitor_name) {
+        if conn != cfg.display.monitor_name {
+            tracing::info!(hint = %cfg.display.monitor_name, connector = %conn, "glasses monitor resolved");
+            cfg.display.monitor_name = conn;
+        }
+    }
     let dev = device::spawn(cfg.clone(), Some(paths.clone()), source);
     let backend = capture::init(cfg.peer_id);
     if let Ok(mut b) = backend.lock() {
@@ -292,4 +300,25 @@ fn main() -> anyhow::Result<()> {
     let res = rt.block_on(server::run(cfg, engine, dev, local_sink, Arc::clone(&backend), ui_rx));
     capture::close(&backend);
     res
+}
+
+/// Map a monitor hint to a connector using `gdctl show` (GNOME 48+), whose
+/// lines read `Monitor DP-5 (LBT Rokid Max)`. Matches the connector itself or
+/// the description, case-insensitively. `None` when gdctl is unavailable or
+/// nothing matches (the hint is then used as-is).
+fn resolve_connector(hint: &str) -> Option<String> {
+    let out = std::process::Command::new("gdctl").arg("show").output().ok()?;
+    let text = String::from_utf8_lossy(&out.stdout);
+    let needle = hint.to_lowercase();
+    for line in text.lines() {
+        let line = line.trim_start_matches(|c: char| !c.is_alphanumeric());
+        let Some(rest) = line.strip_prefix("Monitor ") else {
+            continue;
+        };
+        let connector = rest.split_whitespace().next()?;
+        if connector.to_lowercase().contains(&needle) || rest.to_lowercase().contains(&needle) {
+            return Some(connector.to_string());
+        }
+    }
+    None
 }
