@@ -107,15 +107,6 @@ class MainActivity : ComponentActivity() {
         else if (!want && v.hasPointerCapture()) v.releasePointerCapture()
     }
 
-    /**
-     * While a gamepad skin is up, Perch's window must not take key focus: HID reports go to the
-     * focused display, and a focusable window on the phone would pull focus back on every tap.
-     */
-    fun setGamepadFocusMode(on: Boolean) {
-        val f = android.view.WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
-        if (on) window.addFlags(f) else window.clearFlags(f)
-    }
-
     override fun onWindowFocusChanged(hasFocus: Boolean) {
         super.onWindowFocusChanged(hasFocus)
         updatePointerCapture()

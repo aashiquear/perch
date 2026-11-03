@@ -266,7 +266,10 @@ object AppWindows {
 
     /** A key event from a real device (not the on-screen keyboard). True if consumed. */
     fun hardwareKey(ev: android.view.KeyEvent): Boolean {
-        if (!routeHardware.value || ev.deviceId <= 0 || ev.deviceId == gamepadId) return false
+        // Our own virtual controller's HID events land here whenever the phone was touched last
+        // (the focused display is then the phone); pass them on with their device identity intact.
+        val own = gamepadId >= 0 && ev.deviceId == gamepadId
+        if (!own && (!routeHardware.value || ev.deviceId <= 0)) return false
         val w = focusedWin() ?: return false
         val shell = ShellBridge.shell.value ?: return false
         val copy = android.view.KeyEvent(ev)
@@ -275,7 +278,8 @@ object AppWindows {
 
     /** Mouse / trackpad / joystick motion from a real device. True if consumed. */
     fun hardwareMotion(ev: MotionEvent): Boolean {
-        if (!routeHardware.value || ev.deviceId <= 0 || ev.deviceId == gamepadId) return false
+        val own = gamepadId >= 0 && ev.deviceId == gamepadId
+        if (!own && (!routeHardware.value || ev.deviceId <= 0)) return false
         val w = focusedWin() ?: return false
         val src = ev.source
         if (src and InputDevice.SOURCE_JOYSTICK == InputDevice.SOURCE_JOYSTICK) {

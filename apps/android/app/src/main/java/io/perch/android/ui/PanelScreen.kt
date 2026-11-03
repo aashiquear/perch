@@ -437,8 +437,8 @@ private fun BoxScope.TouchpadOverlay(ctx: Context, mode: Int, onMode: (Int) -> U
         Modifier.align(Alignment.BottomCenter).fillMaxWidth().heightIn(max = maxH),
         shape = RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp), tonalElevation = 3.dp, shadowElevation = 8.dp,
     ) {
-        // Scrolls when a skin plus the bars is taller than the screen (small phones).
-        Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).padding(horizontal = 16.dp).padding(top = 12.dp, bottom = 24.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        // The pad/skin stays fixed; only the control section below scrolls on small phones.
+        Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp).padding(top = 12.dp, bottom = 24.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
                 Row(Modifier.weight(1f).horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                     windows.forEach { w ->
@@ -453,9 +453,7 @@ private fun BoxScope.TouchpadOverlay(ctx: Context, mode: Int, onMode: (Int) -> U
                     FilterChip(selected = mode == i, onClick = { onMode(i) }, label = { Text(n) })
                 }
             }
-            val activity = ctx as? io.perch.android.MainActivity
-            LaunchedEffect(mode) { activity?.setGamepadFocusMode(mode != 0); if (mode != 0) AppWindows.gamepadAnnounce() }
-            DisposableEffect(Unit) { onDispose { activity?.setGamepadFocusMode(false) } }
+            LaunchedEffect(mode) { if (mode != 0) AppWindows.gamepadAnnounce() }
             val gpErr by AppWindows.gamepadError.collectAsStateWithLifecycle()
             val gpInfo by AppWindows.gamepadInfo.collectAsStateWithLifecycle()
             if (mode != 0) {
@@ -504,7 +502,7 @@ private fun BoxScope.TouchpadOverlay(ctx: Context, mode: Int, onMode: (Int) -> U
             BrightnessRow(b)
             // Controls wrap on the left; the d-pad keeps its place on the right at any width.
             val fid = focused
-            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Row(Modifier.fillMaxWidth().weight(1f, fill = false).verticalScroll(rememberScrollState()), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             FlowRow(Modifier.weight(1f), horizontalArrangement = Arrangement.SpaceEvenly, verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 Small(Icons.AutoMirrored.Filled.ArrowBack, "back") { AppWindows.key(KeyEvent.KEYCODE_BACK) }
                 Small(Icons.Filled.SkipNext, "next window") { AppWindows.focusNext(1) }
