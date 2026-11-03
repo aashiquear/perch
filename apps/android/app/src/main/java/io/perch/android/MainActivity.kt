@@ -101,10 +101,19 @@ class MainActivity : ComponentActivity() {
     // Mouse: pointer capture hides the phone's pointer and hands us relative motion,
     // so a Bluetooth mouse drives only the glasses cursor and never clicks the panel.
     private fun updatePointerCapture() {
-        val want = AppWindows.routeHardware.value && AppWindows.focused.value != null && hasWindowFocus()
+        val want = AppWindows.routeHardware.value && AppWindows.focused.value != null && hasWindowFocus() && AppWindows.physicalMouse()
         val v = window.decorView
         if (want && !v.hasPointerCapture()) v.requestPointerCapture()
         else if (!want && v.hasPointerCapture()) v.releasePointerCapture()
+    }
+
+    /**
+     * While a gamepad skin is up, Perch's window must not take key focus: HID reports go to the
+     * focused display, and a focusable window on the phone would pull focus back on every tap.
+     */
+    fun setGamepadFocusMode(on: Boolean) {
+        val f = android.view.WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
+        if (on) window.addFlags(f) else window.clearFlags(f)
     }
 
     override fun onWindowFocusChanged(hasFocus: Boolean) {

@@ -69,6 +69,19 @@ object UhidGamepad {
         }
     }
 
+    private const val UHID_INPUT2 = 12
+
+    /** Send one input report (13 bytes for our descriptor). */
+    @Synchronized
+    fun report(data: ByteArray): Boolean {
+        val f = fd ?: return false
+        return try {
+            val buf = ByteBuffer.allocate(4 + 2 + data.size).order(ByteOrder.nativeOrder())
+            buf.putInt(UHID_INPUT2); buf.putShort(data.size.toShort()); buf.put(data)
+            Os.write(f, buf.array(), 0, buf.capacity()); true
+        } catch (e: Throwable) { Log.e(TAG, "report: $e"); false }
+    }
+
     @Synchronized
     fun destroy() {
         val f = fd ?: return

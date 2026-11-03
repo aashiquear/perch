@@ -225,7 +225,7 @@ fun PanelScreen(ctx: Context, onMirror: () -> Unit) {
         item { Spacer(Modifier.height(24.dp)) }
     }
 
-    if (touchpad) TouchpadOverlay(padMode, { padMode = it }, onDismiss = { touchpad = false })
+    if (touchpad) TouchpadOverlay(ctx, padMode, { padMode = it }, onDismiss = { touchpad = false })
     }
     if (picker) AppPicker(ctx, onPick = { pkg, portrait -> AppWindows.add(ctx, pkg, portrait); picker = false }, onDismiss = { picker = false })
 }
@@ -427,7 +427,7 @@ private fun AppPicker(ctx: Context, onPick: (String, Boolean) -> Unit, onDismiss
  */
 @OptIn(ExperimentalComposeUiApi::class, ExperimentalLayoutApi::class)
 @Composable
-private fun BoxScope.TouchpadOverlay(mode: Int, onMode: (Int) -> Unit, onDismiss: () -> Unit) {
+private fun BoxScope.TouchpadOverlay(ctx: Context, mode: Int, onMode: (Int) -> Unit, onDismiss: () -> Unit) {
     val focused by AppWindows.focused.collectAsStateWithLifecycle()
     val windows by AppWindows.windows.collectAsStateWithLifecycle()
     // Scrim: tap outside the pad to close.
@@ -453,7 +453,9 @@ private fun BoxScope.TouchpadOverlay(mode: Int, onMode: (Int) -> Unit, onDismiss
                     FilterChip(selected = mode == i, onClick = { onMode(i) }, label = { Text(n) })
                 }
             }
-            if (mode != 0) LaunchedEffect(mode) { AppWindows.gamepadAnnounce() }
+            val activity = ctx as? io.perch.android.MainActivity
+            LaunchedEffect(mode) { activity?.setGamepadFocusMode(mode != 0); if (mode != 0) AppWindows.gamepadAnnounce() }
+            DisposableEffect(Unit) { onDispose { activity?.setGamepadFocusMode(false) } }
             val gpErr by AppWindows.gamepadError.collectAsStateWithLifecycle()
             val gpInfo by AppWindows.gamepadInfo.collectAsStateWithLifecycle()
             if (mode != 0) {

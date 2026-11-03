@@ -362,12 +362,62 @@ object AppWindows {
     val axes = FloatArray(8)
     private var lastAxesSend = 0L
 
-    /** A real controller paired to the phone, if any (it is forwarded as-is, see hardwareMotion). */
-    private fun physicalGamepad(): Int? = InputDevice.getDeviceIds().firstOrNull { id ->
-        val d = InputDevice.getDevice(id) ?: return@firstOrNull false
-        !d.isVirtual && d.name != "Perch Gamepad" &&
-            (d.sources and InputDevice.SOURCE_GAMEPAD == InputDevice.SOURCE_GAMEPAD || d.sources and InputDevice.SOURCE_JOYSTICK == InputDevice.SOURCE_JOYSTICK)
+    /** A real controller paired to the phone, if any (it is forwarded as-is, see hardwareMotion).
+     *  Cached: enumerating devices is a binder round-trip per device, far too slow per stick move. */
+    private var physicalCache: Int? = null
+    private var physicalCacheAt = 0L
+    private fun physicalGamepad(): Int? {
+        val now = SystemClock.uptimeMillis()
+        if (now - physicalCacheAt < 3000) return physicalCache
+        physicalCacheAt = now
+        physicalCache = InputDevice.getDeviceIds().firstOrNull { id ->
+            val d = InputDevice.getDevice(id) ?: return@firstOrNull false
+            !d.isVirtual && d.name != "Perch Gamepad" &&
+                (d.sources and InputDevice.SOURCE_GAMEPAD == InputDevice.SOURCE_GAMEPAD || d.sources and InputDevice.SOURCE_JOYSTICK == InputDevice.SOURCE_JOYSTICK)
+        }
+        return physicalCache
     }
+    /** A real mouse paired to the phone (pointer capture is only worth requesting then). */
+    fun physicalMouse(): Boolean = InputDevice.getDeviceIds().any { id ->
+        val d = InputDevice.getDevice(id); d != null && !d.isVirtual && d.sources and InputDevice.SOURCE_MOUSE == InputDevice.SOURCE_MOUSE
+    }
+
+    // ---- HID transport: real kernel input through the virtual device ----
+    /** true = write HID reports (Chrome, cloud gaming and Unity all see a real controller); false = inject per display. */
+    val hidTransport: MutableStateFlow<Boolean> = MutableStateFlow(true)
+    private var buttonBits = 0
+    private val report = ByteArray(13)
+    private fun hidButtonBit(keyCode: Int): Int = when (keyCode) {
+        android.view.KeyEvent.KEYCODE_BUTTON_A -> 0; android.view.KeyEvent.KEYCODE_BUTTON_B -> 1
+        android.view.KeyEvent.KEYCODE_BUTTON_C -> 2; android.view.KeyEvent.KEYCODE_BUTTON_X -> 3
+        android.view.KeyEvent.KEYCODE_BUTTON_Y -> 4; android.view.KeyEvent.KEYCODE_BUTTON_Z -> 5
+        android.view.KeyEvent.KEYCODE_BUTTON_L1 -> 6; android.view.KeyEvent.KEYCODE_BUTTON_R1 -> 7
+        android.view.KeyEvent.KEYCODE_BUTTON_L2 -> 8; android.view.KeyEvent.KEYCODE_BUTTON_R2 -> 9
+        android.view.KeyEvent.KEYCODE_BUTTON_SELECT -> 10; android.view.KeyEvent.KEYCODE_BUTTON_START -> 11
+        android.view.KeyEvent.KEYCODE_BUTTON_MODE -> 12; android.view.KeyEvent.KEYCODE_BUTTON_THUMBL -> 13
+        android.view.KeyEvent.KEYCODE_BUTTON_THUMBR -> 14
+        else -> -1
+    }
+    /** Build and send the HID report from `axes` + `buttonBits`. */
+    private fun sendReport(): Boolean {
+        val shell = ShellBridge.shell.value ?: return false
+        fun s16(v: Float): Int = (v.coerceIn(-1f, 1f) * 32767f).toInt()
+        var i = 0
+        for (k in 0..3) { val v = s16(axes[k]); report[i++] = (v and 0xff).toByte(); report[i++] = ((v shr 8) and 0xff).toByte() }
+        report[i++] = (axes[4].coerceIn(0f, 1f) * 255f).toInt().toByte()
+        report[i++] = (axes[5].coerceIn(0f, 1f) * 255f).toInt().toByte()
+        val hx = axes[6].toInt(); val hy = axes[7].toInt()
+        report[i++] = when {
+            hx == 0 && hy < 0 -> 1; hx > 0 && hy < 0 -> 2; hx > 0 && hy == 0 -> 3; hx > 0 && hy > 0 -> 4
+            hx == 0 && hy > 0 -> 5; hx < 0 && hy > 0 -> 6; hx < 0 && hy == 0 -> 7; hx < 0 && hy < 0 -> 8
+            else -> 0
+        }.toByte()
+        report[i++] = (buttonBits and 0xff).toByte()
+        report[i] = ((buttonBits shr 8) and 0x7f).toByte()
+        return runCatching { shell.gamepadReport(report) }.getOrDefault(false)
+    }
+    /** Whether the HID path is live (device exists and the last report went through). */
+    private fun hidReady(): Boolean = hidTransport.value && physicalGamepad() == null && gamepadDevice() >= 0
 
     private fun gamepadDevice(): Int {
         // Safeguard: with a Bluetooth controller attached, the on-screen pad speaks as that
@@ -395,8 +445,9 @@ object AppWindows {
         val w = focusedWin() ?: return
         val shell = ShellBridge.shell.value ?: return
         val now = SystemClock.uptimeMillis()
-        if (!force && now - lastAxesSend < 8) return
+        if (!force && now - lastAxesSend < 12) return
         lastAxesSend = now
+        if (hidReady() && sendReport()) return
         val dev = gamepadDevice()
         val props = arrayOf(MotionEvent.PointerProperties().apply { id = 0; toolType = MotionEvent.TOOL_TYPE_UNKNOWN })
         val coords = arrayOf(MotionEvent.PointerCoords().apply {
@@ -416,6 +467,20 @@ object AppWindows {
     fun gamepadButton(keyCode: Int, down: Boolean) {
         val w = focusedWin() ?: return
         val shell = ShellBridge.shell.value ?: return
+        if (hidReady()) {
+            val bit = hidButtonBit(keyCode)
+            if (bit >= 0) buttonBits = if (down) buttonBits or (1 shl bit) else buttonBits and (1 shl bit).inv()
+            else when (keyCode) {
+                android.view.KeyEvent.KEYCODE_DPAD_UP -> axes[7] = if (down) -1f else 0f
+                android.view.KeyEvent.KEYCODE_DPAD_DOWN -> axes[7] = if (down) 1f else 0f
+                android.view.KeyEvent.KEYCODE_DPAD_LEFT -> axes[6] = if (down) -1f else 0f
+                android.view.KeyEvent.KEYCODE_DPAD_RIGHT -> axes[6] = if (down) 1f else 0f
+            }
+            val ok = sendReport()
+            val base = gamepadInfo.value.substringBefore(" · ")
+            gamepadInfo.value = "$base · HID ${android.view.KeyEvent.keyCodeToString(keyCode).removePrefix("KEYCODE_")} ${if (down) "down" else "up"}: ${if (ok) "ok" else "write failed"}"
+            if (ok) return
+        }
         val now = SystemClock.uptimeMillis()
         val dev = gamepadDevice()
         val ev = android.view.KeyEvent(now, now, if (down) android.view.KeyEvent.ACTION_DOWN else android.view.KeyEvent.ACTION_UP,

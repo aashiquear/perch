@@ -133,6 +133,11 @@ class PerchShellService(private val context: Context) : IPerchShell.Stub() {
     override fun setBrightness(displayId: Int, value: Float): String =
         sh("cmd", "display", "set-brightness", value.coerceIn(0f, 1f).toString(), "--id", displayId.toString())
 
+    override fun gamepadReport(report: ByteArray): Boolean {
+        if (UhidGamepad.create() != null) return false
+        return UhidGamepad.report(report)
+    }
+
     override fun gamepadDeviceId(): Int {
         UhidGamepad.create()?.let { lastError = it; return -1 }
         val im = inputManager ?: return -1

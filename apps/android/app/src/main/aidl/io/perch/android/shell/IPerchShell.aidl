@@ -36,6 +36,8 @@ interface IPerchShell {
     void resetOrientation(int displayId) = 13;
     /** Hardware brightness of a display (0..1), via `cmd display set-brightness`; returns command output (empty = ok). */
     String setBrightness(int displayId, float value) = 14;
+    /** Write one HID input report to the virtual gamepad (real kernel input; goes to the focused display). */
+    boolean gamepadReport(in byte[] report) = 15;
     /** Shizuku convention: tear the service down. */
     void destroy() = 16777114;
 }
