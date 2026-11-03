@@ -313,10 +313,14 @@ impl ControlPanel {
                 .min_size(egui::vec2(52.0, 52.0))
                 .selected(selected);
             clicked = ui.add(btn).on_hover_text(hint).clicked();
+            // The text takes exactly the column's remaining width and wraps
+            // inside it, so the right-hand column never overflows the window.
             ui.vertical(|ui| {
-                ui.label(egui::RichText::new(label).size(15.0));
+                let w = ui.available_width().max(60.0);
+                ui.set_max_width(w);
+                ui.add(egui::Label::new(egui::RichText::new(label).size(15.0)).wrap());
                 if !shortcut.is_empty() {
-                    ui.label(egui::RichText::new(shortcut).small().weak());
+                    ui.add(egui::Label::new(egui::RichText::new(shortcut).small().weak()).wrap());
                 }
             });
         });
@@ -439,7 +443,7 @@ impl ControlPanel {
                     &mut c[0],
                     Icon::Pick,
                     "To glasses",
-                    "Ctrl+Alt+G in the app",
+                    "Ctrl+Alt+G",
                     "Then click the app window to move.",
                     self.pending_move == Some(FULL),
                 ) {
@@ -449,8 +453,8 @@ impl ControlPanel {
                 if self.action(
                     &mut c[1],
                     Icon::Resize,
-                    "To glasses, half width",
-                    "Ctrl+Alt+H in the app",
+                    "To glasses, half",
+                    "Ctrl+Alt+H",
                     "Then click the app window to move; 960×1080 display.",
                     self.pending_move == Some(HALF),
                 ) {
