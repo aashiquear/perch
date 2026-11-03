@@ -143,7 +143,7 @@ private fun Pedal(label: String, width: Dp, height: Dp, onValue: (Float) -> Unit
 
 @Composable
 private fun BoxScope.XboxSkin() {
-    Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.SpaceBetween) {
+    Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         // Row 1: triggers and bumpers at the top corners, Xbox button in the middle.
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
             Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -176,11 +176,13 @@ private fun BoxScope.XboxSkin() {
                 }
                 Hat(84.dp)
             }
-            Box(Modifier.size(132.dp)) {
-                Box(Modifier.align(Alignment.TopCenter)) { PadButton("Y", KeyEvent.KEYCODE_BUTTON_Y, 44.dp, Color(0xFFF9D342)) }
-                Box(Modifier.align(Alignment.CenterStart)) { PadButton("X", KeyEvent.KEYCODE_BUTTON_X, 44.dp, Color(0xFF6FA8DC)) }
-                Box(Modifier.align(Alignment.CenterEnd)) { PadButton("B", KeyEvent.KEYCODE_BUTTON_B, 44.dp, Color(0xFFE57373)) }
-                Box(Modifier.align(Alignment.BottomCenter)) { PadButton("A", KeyEvent.KEYCODE_BUTTON_A, 44.dp, Color(0xFF81C784)) }
+            // Diamond: 3 × 3 cells of `cell`, buttons in the middle of each edge, so they never overlap.
+            val btn = 54.dp; val cell = 58.dp
+            Box(Modifier.size(cell * 3)) {
+                Box(Modifier.offset(x = cell, y = 0.dp)) { PadButton("Y", KeyEvent.KEYCODE_BUTTON_Y, btn, Color(0xFFF9D342)) }
+                Box(Modifier.offset(x = 0.dp, y = cell)) { PadButton("X", KeyEvent.KEYCODE_BUTTON_X, btn, Color(0xFF6FA8DC)) }
+                Box(Modifier.offset(x = cell * 2, y = cell)) { PadButton("B", KeyEvent.KEYCODE_BUTTON_B, btn, Color(0xFFE57373)) }
+                Box(Modifier.offset(x = cell, y = cell * 2)) { PadButton("A", KeyEvent.KEYCODE_BUTTON_A, btn, Color(0xFF81C784)) }
             }
         }
     }

@@ -264,6 +264,12 @@ object AppWindows {
     // ---- virtual gamepad ------------------------------------------------------
     private var gamepadId = -1
     val gamepadError: MutableStateFlow<String?> = MutableStateFlow(null)
+    /** Human-readable state for the pop-up: which device id speaks, last inject result. */
+    val gamepadInfo: MutableStateFlow<String> = MutableStateFlow("controller: not created yet")
+    private fun describeDevice(id: Int): String {
+        val d = InputDevice.getDevice(id)
+        return if (d == null) "id $id (no InputDevice)" else "${d.name} (id $id${if (d.isVirtual) ", virtual" else ""})"
+    }
     /** Axis state: X Y Z RZ in -1..1, BRAKE GAS 0..1, HAT_X HAT_Y in -1/0/1. */
     val axes = FloatArray(8)
     private var lastAxesSend = 0L
@@ -278,13 +284,14 @@ object AppWindows {
     private fun gamepadDevice(): Int {
         // Safeguard: with a Bluetooth controller attached, the on-screen pad speaks as that
         // controller instead of adding a second one (games would otherwise see player 2).
-        physicalGamepad()?.let { return it }
+        physicalGamepad()?.let { if (gamepadId != it) gamepadInfo.value = "controller: physical ${describeDevice(it)}"; gamepadId = it; return it }
         // The virtual device can vanish (helper restarted); re-check it is still there.
         if (gamepadId >= 0 && InputDevice.getDevice(gamepadId) == null) gamepadId = -1
         if (gamepadId < 0) {
             val shell = ShellBridge.shell.value ?: return -1
             gamepadId = runCatching { shell.gamepadDeviceId() }.getOrDefault(-1)
             gamepadError.value = if (gamepadId < 0) (runCatching { shell.lastError() }.getOrNull() ?: "no gamepad device") else null
+            gamepadInfo.value = if (gamepadId < 0) "controller: none (events carry no device)" else "controller: ${describeDevice(gamepadId)}"
         }
         return gamepadId
     }
@@ -325,7 +332,9 @@ object AppWindows {
         val dev = gamepadDevice()
         val ev = android.view.KeyEvent(now, now, if (down) android.view.KeyEvent.ACTION_DOWN else android.view.KeyEvent.ACTION_UP,
             keyCode, 0, 0, dev, 0, 0, InputDevice.SOURCE_GAMEPAD)
-        runCatching { shell.injectKeyEvent(w.displayId, ev) }
+        val ok = runCatching { shell.injectKeyEvent(w.displayId, ev) }.getOrElse { false }
+        val base = gamepadInfo.value.substringBefore(" · ")
+        gamepadInfo.value = "$base · last button ${android.view.KeyEvent.keyCodeToString(keyCode).removePrefix("KEYCODE_")} ${if (down) "down" else "up"}: ${if (ok) "ok" else "REFUSED" + (runCatching { shell.lastError() }.getOrNull()?.let { " ($it)" } ?: "")} → display ${w.displayId}"
     }
 
     /** Arrow keys (suggestion strips, menus) to the focused window. */

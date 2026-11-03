@@ -14,6 +14,7 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.ui.platform.LocalConfiguration
@@ -122,39 +123,30 @@ fun PanelScreen(ctx: Context, onMirror: () -> Unit) {
             }
         }
         item { LayoutMap(windows.map { it.id to it.portrait }, focused) }
-        // ---- actions ----
-        item {
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Action(Modifier.weight(1f), Icons.Filled.AddToQueue, "Add app", "to the glasses") { picker = true }
-                Action(Modifier.weight(1f), Icons.Filled.TouchApp, "Touchpad", "cursor in focused window", selected = touchpad) { touchpad = true }
-            }
-        }
-        item {
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Action(Modifier.weight(1f), Icons.Filled.SportsEsports, "Gamepad", "Xbox · wheel · flight stick") { padMode = if (padMode == 0) 1 else padMode; touchpad = true }
-                Action(Modifier.weight(1f), Icons.Filled.CenterFocusStrong, "Recenter", "temple button") { GlassesService.recenter() }
-            }
-        }
-        item {
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Action(Modifier.weight(1f), Icons.Filled.Tune, "Calibrate", "20 s, glasses still") { GlassesService.calibrate(20f) }
-            }
-        }
-        item {
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Action(Modifier.weight(1f), Icons.Filled.GridView, if (arrange) "Arrange ▴" else "Arrange ▾", "presets", selected = arrange) { arrange = !arrange }
-                Action(Modifier.weight(1f), Icons.Filled.PhoneAndroid, "All back", "release every window") { AppWindows.releaseAll() }
-            }
-        }
+        // ---- actions: always two per row, no holes ----
         item {
             val themeMode by ThemeMode.mode.collectAsStateWithLifecycle()
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Action(
-                    Modifier.weight(1f),
-                    when (themeMode) { 1 -> Icons.Filled.LightMode; 2 -> Icons.Filled.DarkMode; else -> Icons.Filled.BrightnessAuto },
-                    "Theme: ${ThemeMode.label(themeMode)}", "tap: device → light → dark",
-                ) { ThemeMode.cycle(ctx) }
-                Spacer(Modifier.weight(1f))
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Action(Modifier.weight(1f), Icons.Filled.AddToQueue, "Add app", "to the glasses") { picker = true }
+                    Action(Modifier.weight(1f), Icons.Filled.TouchApp, "Touchpad", "cursor in focused window", selected = touchpad) { padMode = 0; touchpad = true }
+                }
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Action(Modifier.weight(1f), Icons.Filled.SportsEsports, "Gamepad", "Xbox · wheel · flight") { padMode = if (padMode == 0) 1 else padMode; touchpad = true }
+                    Action(Modifier.weight(1f), Icons.Filled.CenterFocusStrong, "Recenter", "temple button") { GlassesService.recenter() }
+                }
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Action(Modifier.weight(1f), Icons.Filled.Tune, "Calibrate", "20 s, glasses still") { GlassesService.calibrate(20f) }
+                    Action(
+                        Modifier.weight(1f),
+                        when (themeMode) { 1 -> Icons.Filled.LightMode; 2 -> Icons.Filled.DarkMode; else -> Icons.Filled.BrightnessAuto },
+                        "Theme", "${ThemeMode.label(themeMode)} · tap to change",
+                    ) { ThemeMode.cycle(ctx) }
+                }
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Action(Modifier.weight(1f), Icons.Filled.GridView, if (arrange) "Arrange ▴" else "Arrange ▾", "presets", selected = arrange) { arrange = !arrange }
+                    Action(Modifier.weight(1f), Icons.Filled.PhoneAndroid, "All back", "release every window") { AppWindows.releaseAll() }
+                }
             }
         }
         if (arrange) item {
@@ -437,11 +429,13 @@ private fun BoxScope.TouchpadOverlay(mode: Int, onMode: (Int) -> Unit, onDismiss
     val windows by AppWindows.windows.collectAsStateWithLifecycle()
     // Scrim: tap outside the pad to close.
     Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.35f)).clickable(onClick = onDismiss))
+    val maxH = (LocalConfiguration.current.screenHeightDp * 0.88f).dp
     Surface(
-        Modifier.align(Alignment.BottomCenter).fillMaxWidth(),
+        Modifier.align(Alignment.BottomCenter).fillMaxWidth().heightIn(max = maxH),
         shape = RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp), tonalElevation = 3.dp, shadowElevation = 8.dp,
     ) {
-        Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp).padding(top = 12.dp, bottom = 24.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        // Scrolls when a skin plus the bars is taller than the screen (small phones).
+        Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).padding(horizontal = 16.dp).padding(top = 12.dp, bottom = 24.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
                 Row(Modifier.weight(1f).horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                     windows.forEach { w ->
@@ -458,7 +452,11 @@ private fun BoxScope.TouchpadOverlay(mode: Int, onMode: (Int) -> Unit, onDismiss
             }
             if (mode != 0) LaunchedEffect(mode) { AppWindows.gamepadAnnounce() }
             val gpErr by AppWindows.gamepadError.collectAsStateWithLifecycle()
-            if (mode != 0) gpErr?.let { Text("Controller identity unavailable ($it); games that insist on a real gamepad may ignore input.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error) }
+            val gpInfo by AppWindows.gamepadInfo.collectAsStateWithLifecycle()
+            if (mode != 0) {
+                gpErr?.let { Text("Controller identity unavailable ($it); games that insist on a real gamepad may ignore input.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error) }
+                Text(gpInfo, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
             val gestures = remember { PhoneTouchpad() }
             var dragLock by remember { mutableStateOf(false) }
             gestures.dragLock = dragLock
@@ -466,7 +464,7 @@ private fun BoxScope.TouchpadOverlay(mode: Int, onMode: (Int) -> Unit, onDismiss
             val padH = (LocalConfiguration.current.screenHeightDp * 0.34f).dp.coerceIn(180.dp, 360.dp)
             val edge = with(LocalDensity.current) { 22.dp.toPx() }
             gestures.edgePx = edge
-            Box(Modifier.fillMaxWidth().height(padH)) {
+            Box(Modifier.fillMaxWidth().then(if (mode == 0) Modifier.height(padH) else Modifier.heightIn(min = padH))) {
                 if (mode != 0) GamepadSkin(mode)
                 else Box(
                     Modifier.fillMaxSize().clip(RoundedCornerShape(16.dp))
