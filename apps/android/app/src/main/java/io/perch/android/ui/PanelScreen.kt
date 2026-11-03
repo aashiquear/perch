@@ -40,6 +40,8 @@ import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.Popup
+import androidx.compose.ui.window.PopupProperties
 import androidx.core.graphics.drawable.toBitmap
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import io.perch.android.R
@@ -225,7 +227,14 @@ fun PanelScreen(ctx: Context, onMirror: () -> Unit) {
         item { Spacer(Modifier.height(24.dp)) }
     }
 
-    if (touchpad) TouchpadOverlay(ctx, padMode, { padMode = it }, onDismiss = { touchpad = false })
+    }
+    // A separate, NON-focusable window: touching it does not move Android's focused display back
+    // to the phone, so the virtual controller's kernel events keep flowing straight to the game's
+    // display (no forwarding, no cancelled key-ups). Keyboard focus stays with the main window.
+    if (touchpad) Popup(properties = PopupProperties(focusable = false, dismissOnClickOutside = false, dismissOnBackPress = false)) {
+        Box(Modifier.fillMaxSize()) {
+            TouchpadOverlay(ctx, padMode, { padMode = it }, onDismiss = { touchpad = false })
+        }
     }
     if (picker) AppPicker(ctx, onPick = { pkg, portrait -> AppWindows.add(ctx, pkg, portrait); picker = false }, onDismiss = { picker = false })
 }

@@ -438,10 +438,24 @@ object AppWindows {
         return gamepadId
     }
 
-    /** Make the controller known again: zero axes + no buttons, sent when a gamepad skin opens. */
+    /** Make the controller known again: zero axes + no buttons, sent when a gamepad skin opens;
+     *  also moves Android's focused display to the game's so kernel HID events go straight there. */
     fun gamepadAnnounce() {
-        java.util.Arrays.fill(axes, 0f)
+        java.util.Arrays.fill(axes, 0f); buttonBits = 0
+        focusGameDisplay()
         gamepadAxes(force = true)
+    }
+
+    /** Injecting any key into a display makes it the focused display (seen in InputDispatcher logs). */
+    fun focusGameDisplay() {
+        val w = focusedWin() ?: return
+        val shell = ShellBridge.shell.value ?: return
+        val now = SystemClock.uptimeMillis()
+        val dev = gamepadDevice()
+        for (action in intArrayOf(android.view.KeyEvent.ACTION_DOWN, android.view.KeyEvent.ACTION_UP)) {
+            val ev = android.view.KeyEvent(now, now, action, android.view.KeyEvent.KEYCODE_UNKNOWN, 0, 0, dev, 0, 0, InputDevice.SOURCE_GAMEPAD)
+            runCatching { shell.injectKeyEvent(w.displayId, ev) }
+        }
     }
 
     /** Send the current axes as one joystick move (rate-limited to ~120 Hz). */
