@@ -85,3 +85,8 @@
 - `am stack list` prints RootTask … displayId=N then taskId=N: pkg/cls; `dumpsys window windows` prints mDisplayId= and hex fl= per window (parsers match).
 - Injected keys/touches to a trusted display are logged by InputDispatcher as 'Inject key/motion (pid/2000) … d=80' and flip the focused display 0→80; none were dropped.
 - GeForce NOW switches to keyboard+mouse mode on any keyboard-sourced key (Back, DPAD); needs controller-sourced d-pad or a real mouse.
+
+## 2026-11-03 — GNOME 50.1 (Ubuntu) monitor hot-plug behaviour
+- Whenever the monitor set changes (virtual display added/removed), Mutter moves a fullscreen window that sits on a secondary monitor (Perch's glasses window on DP-5) onto the primary and gives it focus. Seen with and without gdctl rearrangement. Leaving fullscreen ~0.7 s before the change and re-fullscreening ~2.5 s after avoids it (render.rs unpinned_at).
+- Rearranging monitors with gdctl (DP-5 below the laptop, newest display first) is no longer done: GNOME's own append-to-the-right layout is stable and the shortcut simply hops N monitors; moving existing virtual displays sent their windows back to the laptop.
+- Default `display.monitor_name = "Rokid"` now resolves to the connector through `gdctl show`.

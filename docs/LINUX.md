@@ -18,6 +18,13 @@ GNOME never sees them. All of them are configurable (see `[input]`).
 | **Esc** | cancel a pending "To glasses" from the dashboard |
 | temple button | re-centre (configurable: `[buttons]`) |
 
+How a move works: perchd creates a virtual monitor (GNOME appends it to the
+right of the existing ones: laptop, glasses panel, then one per window), then
+injects GNOME's own `move-to-monitor-right` shortcut once per monitor in
+between. During the add it briefly leaves fullscreen on the glasses, because
+GNOME 50 otherwise drops a fullscreen window on a secondary monitor onto the
+laptop and focuses it, which would make the shortcut move Perch's own window.
+
 In glasses mode the touchpad moves a pointer drawn on the glasses, two
 fingers scroll (direction per `natural_scroll`), and every key goes to the
 app under the focused window. Windows are placed in a flow-row grid; drag a

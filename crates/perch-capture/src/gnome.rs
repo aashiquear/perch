@@ -166,6 +166,7 @@ impl GnomeBackend {
 
     /// Create a virtual monitor and wait for Mutter to place it.
     fn create_display(&mut self) -> Result<usize, CaptureError> {
+        crate::note_layout_change();
         let before = self.layout_now();
         let (reply, rx) = mpsc::channel();
         self.req_tx
@@ -216,7 +217,8 @@ impl GnomeBackend {
             self.layout = now;
         }
         // Let GNOME finish re-laying out before any shortcut is sent.
-        std::thread::sleep(Duration::from_millis(350));
+        crate::note_layout_change();
+        std::thread::sleep(Duration::from_millis(500));
         tracing::info!(
             index = self.displays.len(),
             node_id = created.node_id,
@@ -253,6 +255,17 @@ impl GnomeBackend {
     /// row every move would cross it (and a missed step leaves the app on
     /// the glasses' own output). Returns true when a change was applied.
     fn arrange_layout(&mut self, first: Option<&str>) -> bool {
+        // Rearranging monitors with gdctl after every add/remove turned out to be
+        // the cause of two failures on GNOME 50: the first rearrangement after
+        // start makes GNOME focus Perch's own window (so the move shortcut acts
+        // on it), and moving existing virtual displays to new positions sends
+        // the windows on them back to the laptop. GNOME's own layout appends new
+        // monitors to the right, which is all the shortcut hops need; keep the
+        // code behind PERCH_ARRANGE=1 for experiments.
+        if std::env::var_os("PERCH_ARRANGE").is_none() {
+            self.layout = self.layout_now();
+            return false;
+        }
         let Some(glasses) = self.glasses_connector.clone() else {
             return false;
         };
@@ -373,6 +386,15 @@ impl GnomeBackend {
             (from - to, KEY_LEFT)
         };
         let _ = d_index;
+        tracing::info!(
+            steps,
+            key = if key == KEY_RIGHT { "Right" } else { "Left" },
+            from_x,
+            to_x = x,
+            columns = ?xs,
+            since_layout_change_s = crate::since_layout_change(),
+            "injecting move-to-monitor shortcut for the focused window"
+        );
         let _ = self.req_tx.send(Req::Chord {
             display: CONTROL_SESSION,
             codes: vec![KEY_LEFTMETA, KEY_LEFTSHIFT, key],
@@ -611,6 +633,7 @@ impl CaptureBackend for GnomeBackend {
             return;
         };
         if let Some(d) = slot.take() {
+            crate::note_layout_change();
             tracing::info!(connector = ?d.connector, "releasing virtual glasses display; its windows return to the laptop");
             self.pw.disconnect(d.pw_key);
             d.slot.end();

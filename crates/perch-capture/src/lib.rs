@@ -108,6 +108,34 @@ pub trait CaptureSource: Send {
 }
 
 /// Something that lists and opens capture sources on this machine.
+/// Milliseconds (since the Unix epoch) of the last virtual-display add or
+/// remove. The renderer must not re-fullscreen the glasses window for a few
+/// seconds after it: GNOME focuses a window that goes fullscreen, which would
+/// steal focus from the app a `move-to-monitor` shortcut is about to move.
+pub static LAYOUT_CHANGED_AT_MS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// Record a layout change now.
+pub fn note_layout_change() {
+    let ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0);
+    LAYOUT_CHANGED_AT_MS.store(ms, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// Seconds since the last layout change (large when none).
+pub fn since_layout_change() -> f64 {
+    let at = LAYOUT_CHANGED_AT_MS.load(std::sync::atomic::Ordering::Relaxed);
+    if at == 0 {
+        return f64::MAX;
+    }
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0);
+    now.saturating_sub(at) as f64 / 1000.0
+}
+
 pub trait CaptureBackend: Send {
     /// Enumerate what can be captured (displays, windows).
     fn enumerate(&mut self) -> Result<Vec<Source>, CaptureError>;

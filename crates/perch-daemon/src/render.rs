@@ -60,6 +60,10 @@ pub struct RenderApp {
     ctx: Option<FrameCtx>,
     /// Desktop control window.
     panel: Option<ControlPanel>,
+    /// When the glasses window was taken out of fullscreen for a monitor
+    /// change (GNOME 50 drops a fullscreen window on a secondary monitor onto
+    /// the primary, and focuses it, whenever the monitor set changes).
+    unpinned_at: Option<Instant>,
     panel_last: Instant,
     /// Last check that the glasses window still sits on its monitor.
     monitor_check: Instant,
@@ -132,6 +136,7 @@ impl RenderApp {
             interact: Interaction::new(capture_commands, grab),
             ctx: None,
             panel: None,
+            unpinned_at: None,
             panel_last: Instant::now(),
             monitor_check: Instant::now(),
             was_grabbed: false,
@@ -438,6 +443,17 @@ impl ApplicationHandler for RenderApp {
     fn window_event(&mut self, el: &ActiveEventLoop, id: WinitWindowId, event: WindowEvent) {
         if let WindowEvent::Focused(f) = event {
             crate::capture::PERCH_FOCUSED.store(f, std::sync::atomic::Ordering::Relaxed);
+            let which = if self.panel.as_ref().is_some_and(|p| p.id() == id) {
+                "dashboard"
+            } else {
+                "glasses"
+            };
+            let on = self
+                .window
+                .as_ref()
+                .and_then(|w| w.current_monitor())
+                .and_then(|m| m.name());
+            tracing::debug!(focused = f, which, glasses_window_on = ?on, "perch window focus changed");
         }
         if self.panel.as_ref().is_some_and(|p| p.id() == id) {
             let redraw = self.panel.as_mut().expect("checked").on_event(&event);
@@ -518,17 +534,42 @@ impl ApplicationHandler for RenderApp {
         if let Some(w) = &self.window {
             w.request_redraw();
         }
+        // A virtual display is about to be added or removed (the backend notes
+        // it first): leave fullscreen so GNOME has nothing to relocate, then
+        // go back on the glasses once the layout has settled.
+        let since = perch_capture::since_layout_change();
+        if let Some(w) = &self.window {
+            if since < 0.3 && self.unpinned_at.is_none() && w.fullscreen().is_some() {
+                tracing::info!("monitor change pending: leaving fullscreen on the glasses for a moment");
+                w.set_fullscreen(None);
+                self.unpinned_at = Some(Instant::now());
+            } else if let Some(t) = self.unpinned_at {
+                if t.elapsed() >= std::time::Duration::from_millis(2500) && since >= 2.0 {
+                    let want = find_glasses_monitor(el.available_monitors(), &self.monitor_hint);
+                    tracing::info!(now_on = ?w.current_monitor().and_then(|m| m.name()), "monitor change done: back to fullscreen on the glasses");
+                    w.set_fullscreen(Some(Fullscreen::Borderless(want)));
+                    self.unpinned_at = None;
+                    self.monitor_check = Instant::now();
+                }
+            }
+        }
         // Monitor hot-plug (virtual glasses displays come and go) can knock
         // the fullscreen window off the glasses; put it back.
-        if self.monitor_check.elapsed() >= std::time::Duration::from_secs(2) {
+        if self.unpinned_at.is_none() && self.monitor_check.elapsed() >= std::time::Duration::from_secs(2) {
             self.monitor_check = Instant::now();
             if let Some(w) = &self.window {
                 let want = find_glasses_monitor(el.available_monitors(), &self.monitor_hint);
                 if let Some(want) = want {
-                    let on_it = w.current_monitor().is_some_and(|m| m.name() == want.name());
+                    // Only act on a definite "it is on another monitor": right after a
+                    // layout change winit reports no monitor at all, and re-fullscreening
+                    // then makes GNOME focus this window, stealing focus from the app
+                    // the backend is about to move with a shortcut.
+                    let elsewhere = w.current_monitor().is_some_and(|m| m.name() != want.name());
                     let fullscreen = w.fullscreen().is_some();
-                    if !on_it || !fullscreen {
-                        tracing::info!(name = ?want.name(), on_it, fullscreen, "re-pinning glasses window to its monitor");
+                    let settling = perch_capture::since_layout_change() < 4.0;
+                    if (elsewhere || !fullscreen) && !settling {
+                        let on_it = !elsewhere;
+                        tracing::info!(name = ?want.name(), on_it, fullscreen, now_on = ?w.current_monitor().and_then(|m| m.name()), "re-pinning glasses window to its monitor");
                         w.set_fullscreen(Some(Fullscreen::Borderless(Some(want))));
                     }
                 }
