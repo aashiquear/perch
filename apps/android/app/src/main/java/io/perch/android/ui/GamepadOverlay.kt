@@ -35,38 +35,10 @@ import kotlin.math.sin
  * pedals → triggers, paddles → bumpers), flight stick (stick → left stick,
  * twist → right stick X, throttle → right stick Y).
  */
-@OptIn(ExperimentalLayoutApi::class)
+/** The gamepad surface inside the touchpad pop-up: one of the three skins. */
 @Composable
-fun BoxScope.GamepadOverlay(onDismiss: () -> Unit) {
-    var skin by rememberSaveable { mutableIntStateOf(0) }
-    val err by AppWindows.gamepadError.collectAsStateWithLifecycle()
-    val bright by AppWindows.brightness.collectAsStateWithLifecycle()
-    Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.35f)).clickable(onClick = onDismiss))
-    Surface(
-        Modifier.align(Alignment.BottomCenter).fillMaxWidth(),
-        shape = RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp), tonalElevation = 3.dp, shadowElevation = 8.dp,
-    ) {
-        Column(Modifier.fillMaxWidth().padding(horizontal = 12.dp).padding(top = 10.dp, bottom = 20.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Row(Modifier.weight(1f), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    listOf("Xbox", "Racing wheel", "Flight stick").forEachIndexed { i, n ->
-                        FilterChip(selected = skin == i, onClick = { skin = i }, label = { Text(n) })
-                    }
-                }
-                IconButton(onDismiss) { Icon(Icons.Filled.Close, "close gamepad") }
-            }
-            err?.let { Text("Controller identity unavailable ($it); games that insist on a real gamepad may ignore input.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error) }
-            val h = (LocalConfiguration.current.screenHeightDp * 0.42f).dp.coerceIn(260.dp, 420.dp)
-            Box(Modifier.fillMaxWidth().height(h)) {
-                when (skin) { 0 -> XboxSkin(); 1 -> WheelSkin(); else -> FlightSkin() }
-            }
-            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text("Glasses dim", style = MaterialTheme.typography.labelSmall)
-                Slider(bright, { AppWindows.setBrightness(it) }, Modifier.weight(1f), valueRange = 0.15f..1f)
-                Text("${(bright * 100).toInt()}%", style = MaterialTheme.typography.labelSmall)
-            }
-        }
-    }
+fun BoxScope.GamepadSkin(mode: Int) {
+    when (mode) { 1 -> XboxSkin(); 2 -> WheelSkin(); else -> FlightSkin() }
 }
 
 // ---- axis helpers ------------------------------------------------------------
@@ -171,30 +143,46 @@ private fun Pedal(label: String, width: Dp, height: Dp, onValue: (Float) -> Unit
 
 @Composable
 private fun BoxScope.XboxSkin() {
-    Row(Modifier.align(Alignment.TopCenter).fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-            PadButton("LT", KeyEvent.KEYCODE_BUTTON_L2, 44.dp, shape = RoundedCornerShape(10.dp))
-            PadButton("LB", KeyEvent.KEYCODE_BUTTON_L1, 44.dp, shape = RoundedCornerShape(10.dp))
+    Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.SpaceBetween) {
+        // Row 1: triggers and bumpers at the top corners, Xbox button in the middle.
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                PadButton("LT", KeyEvent.KEYCODE_BUTTON_L2, 44.dp, shape = RoundedCornerShape(10.dp))
+                PadButton("LB", KeyEvent.KEYCODE_BUTTON_L1, 44.dp, shape = RoundedCornerShape(10.dp))
+            }
+            PadButton("ⓧ", KeyEvent.KEYCODE_BUTTON_MODE, 36.dp, Color(0xFF9CCC65))
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                PadButton("RB", KeyEvent.KEYCODE_BUTTON_R1, 44.dp, shape = RoundedCornerShape(10.dp))
+                PadButton("RT", KeyEvent.KEYCODE_BUTTON_R2, 44.dp, shape = RoundedCornerShape(10.dp))
+            }
         }
-        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-            PadButton("☰", KeyEvent.KEYCODE_BUTTON_SELECT, 36.dp)
-            PadButton("≡", KeyEvent.KEYCODE_BUTTON_START, 36.dp)
+        // Row 2: the two sticks, same size, side by side under the shoulder buttons.
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly, verticalAlignment = Alignment.CenterVertically) {
+            Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Stick(118.dp, "L") { x, y -> setAxes(0 to x, 1 to y) }
+                PadButton("L3", KeyEvent.KEYCODE_BUTTON_THUMBL, 32.dp)
+            }
+            Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Stick(118.dp, "R") { x, y -> setAxes(2 to x, 3 to y) }
+                PadButton("R3", KeyEvent.KEYCODE_BUTTON_THUMBR, 32.dp)
+            }
         }
-        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-            PadButton("RB", KeyEvent.KEYCODE_BUTTON_R1, 44.dp, shape = RoundedCornerShape(10.dp))
-            PadButton("RT", KeyEvent.KEYCODE_BUTTON_R2, 44.dp, shape = RoundedCornerShape(10.dp))
+        // Row 3: view / menu and the hat on the left, A B X Y on the right.
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    PadButton("view", KeyEvent.KEYCODE_BUTTON_SELECT, 40.dp, shape = RoundedCornerShape(10.dp))
+                    PadButton("menu", KeyEvent.KEYCODE_BUTTON_START, 40.dp, shape = RoundedCornerShape(10.dp))
+                }
+                Hat(84.dp)
+            }
+            Box(Modifier.size(132.dp)) {
+                Box(Modifier.align(Alignment.TopCenter)) { PadButton("Y", KeyEvent.KEYCODE_BUTTON_Y, 44.dp, Color(0xFFF9D342)) }
+                Box(Modifier.align(Alignment.CenterStart)) { PadButton("X", KeyEvent.KEYCODE_BUTTON_X, 44.dp, Color(0xFF6FA8DC)) }
+                Box(Modifier.align(Alignment.CenterEnd)) { PadButton("B", KeyEvent.KEYCODE_BUTTON_B, 44.dp, Color(0xFFE57373)) }
+                Box(Modifier.align(Alignment.BottomCenter)) { PadButton("A", KeyEvent.KEYCODE_BUTTON_A, 44.dp, Color(0xFF81C784)) }
+            }
         }
-    }
-    Row(Modifier.align(Alignment.Center).fillMaxWidth().padding(top = 44.dp), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-        Stick(120.dp, "L") { x, y -> setAxes(0 to x, 1 to y) }
-        Hat(84.dp)
-        Box(Modifier.size(140.dp)) {
-            Box(Modifier.align(Alignment.TopCenter)) { PadButton("Y", KeyEvent.KEYCODE_BUTTON_Y, 46.dp, Color(0xFFF9D342)) }
-            Box(Modifier.align(Alignment.CenterStart)) { PadButton("X", KeyEvent.KEYCODE_BUTTON_X, 46.dp, Color(0xFF6FA8DC)) }
-            Box(Modifier.align(Alignment.CenterEnd)) { PadButton("B", KeyEvent.KEYCODE_BUTTON_B, 46.dp, Color(0xFFE57373)) }
-            Box(Modifier.align(Alignment.BottomCenter)) { PadButton("A", KeyEvent.KEYCODE_BUTTON_A, 46.dp, Color(0xFF81C784)) }
-        }
-        Stick(120.dp, "R") { x, y -> setAxes(2 to x, 3 to y) }
     }
 }
 

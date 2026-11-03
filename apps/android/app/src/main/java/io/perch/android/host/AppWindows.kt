@@ -212,7 +212,7 @@ object AppWindows {
 
     /** A key event from a real device (not the on-screen keyboard). True if consumed. */
     fun hardwareKey(ev: android.view.KeyEvent): Boolean {
-        if (!routeHardware.value || ev.deviceId <= 0) return false
+        if (!routeHardware.value || ev.deviceId <= 0 || ev.deviceId == gamepadId) return false
         val w = focusedWin() ?: return false
         val shell = ShellBridge.shell.value ?: return false
         val copy = android.view.KeyEvent(ev)
@@ -221,7 +221,7 @@ object AppWindows {
 
     /** Mouse / trackpad / joystick motion from a real device. True if consumed. */
     fun hardwareMotion(ev: MotionEvent): Boolean {
-        if (!routeHardware.value || ev.deviceId <= 0) return false
+        if (!routeHardware.value || ev.deviceId <= 0 || ev.deviceId == gamepadId) return false
         val w = focusedWin() ?: return false
         val src = ev.source
         if (src and InputDevice.SOURCE_JOYSTICK == InputDevice.SOURCE_JOYSTICK) {
@@ -268,13 +268,31 @@ object AppWindows {
     val axes = FloatArray(8)
     private var lastAxesSend = 0L
 
+    /** A real controller paired to the phone, if any (it is forwarded as-is, see hardwareMotion). */
+    private fun physicalGamepad(): Int? = InputDevice.getDeviceIds().firstOrNull { id ->
+        val d = InputDevice.getDevice(id) ?: return@firstOrNull false
+        !d.isVirtual && d.name != "Perch Gamepad" &&
+            (d.sources and InputDevice.SOURCE_GAMEPAD == InputDevice.SOURCE_GAMEPAD || d.sources and InputDevice.SOURCE_JOYSTICK == InputDevice.SOURCE_JOYSTICK)
+    }
+
     private fun gamepadDevice(): Int {
+        // Safeguard: with a Bluetooth controller attached, the on-screen pad speaks as that
+        // controller instead of adding a second one (games would otherwise see player 2).
+        physicalGamepad()?.let { return it }
+        // The virtual device can vanish (helper restarted); re-check it is still there.
+        if (gamepadId >= 0 && InputDevice.getDevice(gamepadId) == null) gamepadId = -1
         if (gamepadId < 0) {
             val shell = ShellBridge.shell.value ?: return -1
             gamepadId = runCatching { shell.gamepadDeviceId() }.getOrDefault(-1)
-            if (gamepadId < 0) gamepadError.value = runCatching { shell.lastError() }.getOrNull() ?: "no gamepad device"
+            gamepadError.value = if (gamepadId < 0) (runCatching { shell.lastError() }.getOrNull() ?: "no gamepad device") else null
         }
         return gamepadId
+    }
+
+    /** Make the controller known again: zero axes + no buttons, sent when a gamepad skin opens. */
+    fun gamepadAnnounce() {
+        java.util.Arrays.fill(axes, 0f)
+        gamepadAxes(force = true)
     }
 
     /** Send the current axes as one joystick move (rate-limited to ~120 Hz). */

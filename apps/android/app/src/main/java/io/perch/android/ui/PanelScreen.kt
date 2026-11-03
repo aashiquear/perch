@@ -26,6 +26,7 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
@@ -70,7 +71,7 @@ fun PanelScreen(ctx: Context, onMirror: () -> Unit) {
     val displayNames by GlassesService.displayNames.collectAsStateWithLifecycle()
     var picker by remember { mutableStateOf(false) }
     var touchpad by remember { mutableStateOf(false) }
-    var gamepad by remember { mutableStateOf(false) }
+    var padMode by rememberSaveable { mutableIntStateOf(0) }   // 0 touchpad, 1 xbox, 2 wheel, 3 flight
     val bright by AppWindows.brightness.collectAsStateWithLifecycle()
     var arrange by remember { mutableStateOf(false) }
 
@@ -130,7 +131,7 @@ fun PanelScreen(ctx: Context, onMirror: () -> Unit) {
         }
         item {
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Action(Modifier.weight(1f), Icons.Filled.SportsEsports, "Gamepad", "Xbox · wheel · flight stick", selected = gamepad) { gamepad = true }
+                Action(Modifier.weight(1f), Icons.Filled.SportsEsports, "Gamepad", "Xbox · wheel · flight stick") { padMode = if (padMode == 0) 1 else padMode; touchpad = true }
                 Action(Modifier.weight(1f), Icons.Filled.CenterFocusStrong, "Recenter", "temple button") { GlassesService.recenter() }
             }
         }
@@ -220,8 +221,7 @@ fun PanelScreen(ctx: Context, onMirror: () -> Unit) {
         item { Spacer(Modifier.height(24.dp)) }
     }
 
-    if (touchpad) TouchpadOverlay(onDismiss = { touchpad = false })
-    if (gamepad) GamepadOverlay(onDismiss = { gamepad = false })
+    if (touchpad) TouchpadOverlay(padMode, { padMode = it }, onDismiss = { touchpad = false })
     }
     if (picker) AppPicker(ctx, onPick = { pkg, portrait -> AppWindows.add(ctx, pkg, portrait); picker = false }, onDismiss = { picker = false })
 }
@@ -421,7 +421,7 @@ private fun AppPicker(ctx: Context, onPick: (String, Boolean) -> Unit, onDismiss
  */
 @OptIn(ExperimentalComposeUiApi::class, ExperimentalLayoutApi::class)
 @Composable
-private fun BoxScope.TouchpadOverlay(onDismiss: () -> Unit) {
+private fun BoxScope.TouchpadOverlay(mode: Int, onMode: (Int) -> Unit, onDismiss: () -> Unit) {
     val focused by AppWindows.focused.collectAsStateWithLifecycle()
     val windows by AppWindows.windows.collectAsStateWithLifecycle()
     // Scrim: tap outside the pad to close.
@@ -439,6 +439,15 @@ private fun BoxScope.TouchpadOverlay(onDismiss: () -> Unit) {
                 }
                 IconButton(onDismiss) { Icon(Icons.Filled.Close, "close touchpad") }
             }
+            // One pop-up, four input surfaces; controls, d-pad and dimming stay the same.
+            Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                listOf("Touchpad", "Xbox", "Racing wheel", "Flight stick").forEachIndexed { i, n ->
+                    FilterChip(selected = mode == i, onClick = { onMode(i) }, label = { Text(n) })
+                }
+            }
+            if (mode != 0) LaunchedEffect(mode) { AppWindows.gamepadAnnounce() }
+            val gpErr by AppWindows.gamepadError.collectAsStateWithLifecycle()
+            if (mode != 0) gpErr?.let { Text("Controller identity unavailable ($it); games that insist on a real gamepad may ignore input.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error) }
             val gestures = remember { PhoneTouchpad() }
             var dragLock by remember { mutableStateOf(false) }
             gestures.dragLock = dragLock
@@ -446,9 +455,10 @@ private fun BoxScope.TouchpadOverlay(onDismiss: () -> Unit) {
             val padH = (LocalConfiguration.current.screenHeightDp * 0.34f).dp.coerceIn(180.dp, 360.dp)
             val edge = with(LocalDensity.current) { 22.dp.toPx() }
             gestures.edgePx = edge
-            Row(Modifier.fillMaxWidth().height(padH), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Box(
-                    Modifier.weight(1f).fillMaxHeight().clip(RoundedCornerShape(16.dp))
+            Box(Modifier.fillMaxWidth().height(padH)) {
+                if (mode != 0) GamepadSkin(mode)
+                else Box(
+                    Modifier.fillMaxSize().clip(RoundedCornerShape(16.dp))
                         .background(MaterialTheme.colorScheme.surfaceVariant)
                         // Thin rim: a stroke that starts here is a drag (press held while you slide).
                         .border(22.dp, if (dragLock) Color(0x553F51B5) else Color(0x332196F3), RoundedCornerShape(16.dp))
@@ -468,14 +478,13 @@ private fun BoxScope.TouchpadOverlay(onDismiss: () -> Unit) {
                         Icon(if (dragLock) Icons.Filled.Lock else Icons.Filled.LockOpen, "drag lock", Modifier.size(18.dp))
                     }
                 }
-                // Arrow keys for suggestion strips / menus that need a keyboard cursor.
-                DPad(Modifier.size(112.dp)) { AppWindows.arrow(it) }
             }
             val b by AppWindows.brightness.collectAsStateWithLifecycle()
             BrightnessRow(b)
-            // Icon row. No Home/Recents: those act on the phone's own display, not the glasses.
+            // Controls wrap on the left; the d-pad keeps its place on the right at any width.
             val fid = focused
-            FlowRow(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly, verticalArrangement = Arrangement.spacedBy(6.dp), maxItemsInEachRow = 5) {
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            FlowRow(Modifier.weight(1f), horizontalArrangement = Arrangement.SpaceEvenly, verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 Small(Icons.AutoMirrored.Filled.ArrowBack, "back") { AppWindows.key(KeyEvent.KEYCODE_BACK) }
                 Small(Icons.Filled.SkipNext, "next window") { AppWindows.focusNext(1) }
                 Small(Icons.Filled.PushPin, "pin here") { fid?.let { AppWindows.pinHere(it) } }
@@ -485,6 +494,9 @@ private fun BoxScope.TouchpadOverlay(onDismiss: () -> Unit) {
                 Small(Icons.Filled.ArrowDownward, "nearer") { fid?.let { AppWindows.nearer(it) } }
                 Small(Icons.Filled.ArrowUpward, "further") { fid?.let { AppWindows.further(it) } }
                 Small(Icons.Filled.Refresh, "re-open app") { fid?.let { AppWindows.relaunch(it) } }
+            }
+            // Arrow keys for suggestion strips / menus that need a keyboard cursor.
+            DPad(Modifier.size(112.dp)) { AppWindows.arrow(it) }
             }
         }
     }
