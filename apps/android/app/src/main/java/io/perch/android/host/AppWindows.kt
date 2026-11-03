@@ -168,6 +168,11 @@ object AppWindows {
         cursorU = (cursorU + dx / w.width).coerceIn(0f, 1f)
         cursorV = (cursorV + dy / w.height).coerceIn(0f, 1f)
         GlassesService.presentation?.setCursor(w.layer, cursorU, cursorV)
+        if (mouseMode.value) {
+            injectMouse(mouseEvent(if (mouseButtonDown) MotionEvent.ACTION_MOVE else MotionEvent.ACTION_HOVER_MOVE,
+                if (mouseButtonDown) MotionEvent.BUTTON_PRIMARY else 0, dx, dy))
+            return
+        }
         if (dragging) touch(MotionEvent.ACTION_MOVE)
     }
 
@@ -185,11 +190,60 @@ object AppWindows {
         ev.recycle()
     }
 
-    /** Tap = touch down/up at the cursor. */
-    fun tap() { touch(MotionEvent.ACTION_DOWN); touch(MotionEvent.ACTION_UP) }
+    /** Tap = touch down/up at the cursor (or a mouse click in mouse mode). */
+    fun tap() { pressDown(); pressUp() }
 
-    fun pressDown() { dragging = true; touch(MotionEvent.ACTION_DOWN) }
-    fun pressUp() { if (dragging) { dragging = false; touch(MotionEvent.ACTION_UP) } }
+    fun pressDown() {
+        if (mouseMode.value) {
+            mouseButtonDown = true
+            injectMouse(mouseEvent(MotionEvent.ACTION_DOWN, MotionEvent.BUTTON_PRIMARY))
+            injectMouse(mouseEvent(MotionEvent.ACTION_BUTTON_PRESS, MotionEvent.BUTTON_PRIMARY))
+            return
+        }
+        dragging = true; touch(MotionEvent.ACTION_DOWN)
+    }
+    fun pressUp() {
+        if (mouseButtonDown) {
+            mouseButtonDown = false
+            injectMouse(mouseEvent(MotionEvent.ACTION_BUTTON_RELEASE, 0))
+            injectMouse(mouseEvent(MotionEvent.ACTION_UP, 0))
+            return
+        }
+        if (dragging) { dragging = false; touch(MotionEvent.ACTION_UP) }
+    }
+
+    // ---- two-finger scroll as a touch drag (what the app expects from a finger) ----
+    private var scrollDrag = false
+    private var scrollU = 0f; private var scrollV = 0f
+    fun scrollStart() {
+        val w = focusedWin() ?: return
+        if (mouseMode.value) return
+        scrollDrag = true; scrollU = cursorU; scrollV = cursorV
+        touchAt(MotionEvent.ACTION_DOWN, scrollU, scrollV, w)
+    }
+    /** dx, dy in trackpad px: content follows the fingers. */
+    fun scrollMove(dx: Float, dy: Float) {
+        val w = focusedWin() ?: return
+        if (mouseMode.value) { scroll(if (dx > 0) 1f else if (dx < 0) -1f else 0f, if (dy < 0) 1f else if (dy > 0) -1f else 0f); return }
+        if (!scrollDrag) scrollStart()
+        scrollU = (scrollU + dx / w.width).coerceIn(0f, 1f); scrollV = (scrollV + dy / w.height).coerceIn(0f, 1f)
+        touchAt(MotionEvent.ACTION_MOVE, scrollU, scrollV, w)
+    }
+    fun scrollEnd() {
+        val w = focusedWin() ?: return
+        if (!scrollDrag) return
+        scrollDrag = false
+        touchAt(MotionEvent.ACTION_UP, scrollU, scrollV, w)
+    }
+    private fun touchAt(action: Int, u: Float, v: Float, w: Win) {
+        val shell = ShellBridge.shell.value ?: return
+        val now = SystemClock.uptimeMillis()
+        if (action == MotionEvent.ACTION_DOWN) downTime = now
+        val ev = MotionEvent.obtain(downTime, now, action, u * w.width, v * w.height, 0)
+        ev.source = InputDevice.SOURCE_TOUCHSCREEN
+        runCatching { shell.injectMotion(w.displayId, ev) }
+        ev.recycle()
+    }
 
     /** Two-finger scroll → mouse wheel at the cursor (lines; dy positive = up, dx positive = right). */
     fun scroll(dx: Float, dy: Float) {
@@ -259,7 +313,41 @@ object AppWindows {
 
     // ---- glasses dimming -----------------------------------------------------
     val brightness: MutableStateFlow<Float> = MutableStateFlow(1f)
-    fun setBrightness(b: Float) { brightness.value = b; GlassesService.presentation?.setBrightness(b) }
+    /** True once the hardware path (cmd display set-brightness on the glasses display) has worked. */
+    val hardwareBrightness: MutableStateFlow<Boolean> = MutableStateFlow(false)
+    fun setBrightness(b: Float) {
+        brightness.value = b
+        val shell = ShellBridge.shell.value
+        val did = GlassesService.glassesDisplayId
+        if (shell != null && did >= 0) {
+            val out = runCatching { shell.setBrightness(did, b) }.getOrElse { it.toString() }
+            if (out.isEmpty()) { hardwareBrightness.value = true; GlassesService.presentation?.setBrightness(1f); return }
+            Log.w(TAG, "hardware brightness: $out")
+        }
+        hardwareBrightness.value = false
+        GlassesService.presentation?.setBrightness(b)
+    }
+
+    // ---- mouse mode: the cursor is a real mouse to the app (cloud gaming, remote desktops) ----
+    val mouseMode: MutableStateFlow<Boolean> = MutableStateFlow(false)
+    private fun mouseEvent(action: Int, buttons: Int, dx: Float = 0f, dy: Float = 0f, vscroll: Float = 0f, hscroll: Float = 0f): MotionEvent {
+        val w = focusedWin()!!
+        val now = SystemClock.uptimeMillis()
+        if (action == MotionEvent.ACTION_DOWN) downTime = now
+        val props = arrayOf(MotionEvent.PointerProperties().apply { id = 0; toolType = MotionEvent.TOOL_TYPE_MOUSE })
+        val coords = arrayOf(MotionEvent.PointerCoords().apply {
+            x = cursorU * w.width; y = cursorV * w.height
+            setAxisValue(MotionEvent.AXIS_RELATIVE_X, dx); setAxisValue(MotionEvent.AXIS_RELATIVE_Y, dy)
+            setAxisValue(MotionEvent.AXIS_VSCROLL, vscroll); setAxisValue(MotionEvent.AXIS_HSCROLL, hscroll)
+        })
+        return MotionEvent.obtain(downTime, now, action, 1, props, coords, 0, buttons, 1f, 1f, -1, 0, InputDevice.SOURCE_MOUSE, 0)
+    }
+    private fun injectMouse(ev: MotionEvent) {
+        val w = focusedWin() ?: return
+        runCatching { ShellBridge.shell.value?.injectMotion(w.displayId, ev) }
+        ev.recycle()
+    }
+    private var mouseButtonDown = false
 
     // ---- virtual gamepad ------------------------------------------------------
     private var gamepadId = -1
@@ -331,14 +419,17 @@ object AppWindows {
         val now = SystemClock.uptimeMillis()
         val dev = gamepadDevice()
         val ev = android.view.KeyEvent(now, now, if (down) android.view.KeyEvent.ACTION_DOWN else android.view.KeyEvent.ACTION_UP,
-            keyCode, 0, 0, dev, 0, 0, InputDevice.SOURCE_GAMEPAD)
+            keyCode, 0, 0, dev, 0, 0, InputDevice.SOURCE_GAMEPAD or InputDevice.SOURCE_DPAD)
         val ok = runCatching { shell.injectKeyEvent(w.displayId, ev) }.getOrElse { false }
         val base = gamepadInfo.value.substringBefore(" · ")
         gamepadInfo.value = "$base · last button ${android.view.KeyEvent.keyCodeToString(keyCode).removePrefix("KEYCODE_")} ${if (down) "down" else "up"}: ${if (ok) "ok" else "REFUSED" + (runCatching { shell.lastError() }.getOrNull()?.let { " ($it)" } ?: "")} → display ${w.displayId}"
     }
 
-    /** Arrow keys (suggestion strips, menus) to the focused window. */
-    fun arrow(keyCode: Int) = key(keyCode)
+    /** Arrow keys (suggestion strips, menus) to the focused window; as controller d-pad in gamepad modes
+     *  so apps like GeForce NOW stay in gamepad mode instead of switching to keyboard+mouse. */
+    fun arrow(keyCode: Int, asGamepad: Boolean = false) {
+        if (asGamepad) { gamepadButton(keyCode, true); gamepadButton(keyCode, false) } else key(keyCode)
+    }
 
     /** Back key etc. to the focused app. */
     fun key(keyCode: Int) {

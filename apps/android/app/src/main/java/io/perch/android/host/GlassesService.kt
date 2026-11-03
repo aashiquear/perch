@@ -78,6 +78,8 @@ class GlassesService : Service() {
         @Volatile private var instance: GlassesService? = null
         /** Application context for callers without one (AppWindows.relaunch). */
         val appContext: Context? get() = instance?.applicationContext
+        /** Display id of the glasses panel, or -1. */
+        val glassesDisplayId: Int get() = instance?.presentation?.display?.displayId ?: -1
         /** The glasses presentation, once the external display is up. */
         val presentation: GlassesPresentation? get() = instance?.presentation
         /** True while the glasses display is attached. */

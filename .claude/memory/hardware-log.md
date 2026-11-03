@@ -77,3 +77,11 @@
 - 2026-11-01 GNOME 50 Mutter: RecordVirtual + PipeWire fixed-size format → logical monitor `Meta-0` at x=3968 (right of eDP-1 2048 logical + DP-5 1920); negotiates BGRx 1920x1080; RemoteDesktop.Session methods verified via introspection (NotifyPointerMotionAbsolute(s stream_path,d,d), NotifyKeyboardKeycode(u,b), NotifyPointerButton(i,b), NotifyPointerAxisDiscrete(u,i)). eDP-1 is 3072x1920 at scale 1.5.
 - 2026-11-01 Rokid Max brightness: not controllable through ar-drivers 0.4.3 (packet reports display_brightness/volume only; no control transfer known). The temple rocker works.
 - 2026-11-01 Mutter relative pointer motion (RemoteDesktop virtual pointer): a move whose target lies on no monitor is clamped to the current monitor's edge, not to the nearest monitor; cross-monitor warps must be done in steps that each land on a monitor.
+
+## 2026-11-02 — S24 Ultra (SM-S928B, Android 16 / One UI 8.5) as host, over Wi-Fi adb
+- Rokid Max is display 79: modes 1920×1080 @60/120 and 1920×1200 @60/120; Presentation now requests the 120 Hz 1080p mode.
+- `cmd display set-brightness V --id 79` sets the glasses' hardware brightness from uid shell (read back confirms). Android reports brightness range 0..1, default 0.5.
+- /dev/uhid is group uhid (3011) and shell is a member: the virtual "Perch Gamepad" (vendor 045e / 02fd) gets Vendor_045e_Product_02fd.kl, Sources KEYBOARD|GAMEPAD|JOYSTICK.
+- `am stack list` prints RootTask … displayId=N then taskId=N: pkg/cls; `dumpsys window windows` prints mDisplayId= and hex fl= per window (parsers match).
+- Injected keys/touches to a trusted display are logged by InputDispatcher as 'Inject key/motion (pid/2000) … d=80' and flip the focused display 0→80; none were dropped.
+- GeForce NOW switches to keyboard+mouse mode on any keyboard-sourced key (Back, DPAD); needs controller-sourced d-pad or a real mouse.

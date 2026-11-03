@@ -104,6 +104,7 @@ fun PanelScreen(ctx: Context, onMirror: () -> Unit) {
                         style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                     if (displayNames.isNotEmpty()) Text("displays: $displayNames", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    if (cal == 0 && hz > 0) Text("Not calibrated: windows will drift. Put the glasses on a table and tap Calibrate once.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
                     Text(
                         if (touchpad) "● TOUCHPAD — moving the cursor on the glasses" else "○ PANEL",
                         color = if (touchpad) Color(0xFF5ADC8C) else Color(0xFFE6BE50), fontWeight = FontWeight.SemiBold,
@@ -265,7 +266,9 @@ private fun PresetPicture(name: String, ratios: List<Float>, onClick: () -> Unit
 /** Software dimming of the glasses image; hardware brightness is the temple rocker. */
 @Composable
 private fun BrightnessRow(value: Float) {
+    val hw by AppWindows.hardwareBrightness.collectAsStateWithLifecycle()
     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        Text(if (hw) "glasses" else "dim", style = MaterialTheme.typography.labelSmall)
         Icon(Icons.Filled.BrightnessLow, "dim", Modifier.size(18.dp))
         Slider(value, { AppWindows.setBrightness(it) }, Modifier.weight(1f), valueRange = 0.15f..1f)
         Icon(Icons.Filled.BrightnessHigh, "bright", Modifier.size(18.dp))
@@ -464,6 +467,12 @@ private fun BoxScope.TouchpadOverlay(mode: Int, onMode: (Int) -> Unit, onDismiss
             val padH = (LocalConfiguration.current.screenHeightDp * 0.34f).dp.coerceIn(180.dp, 360.dp)
             val edge = with(LocalDensity.current) { 22.dp.toPx() }
             gestures.edgePx = edge
+            val mouse by AppWindows.mouseMode.collectAsStateWithLifecycle()
+            if (mode == 0) Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
+                FilterChip(selected = !mouse, onClick = { AppWindows.mouseMode.value = false }, label = { Text("Touch") })
+                FilterChip(selected = mouse, onClick = { AppWindows.mouseMode.value = true }, label = { Text("Mouse") })
+                Text(if (mouse) "acts as a real mouse (cloud gaming, remote desktop)" else "acts as a finger on the app", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
             Box(Modifier.fillMaxWidth().then(if (mode == 0) Modifier.height(padH) else Modifier.heightIn(min = padH))) {
                 if (mode != 0) GamepadSkin(mode)
                 else Box(
@@ -481,11 +490,12 @@ private fun BoxScope.TouchpadOverlay(mode: Int, onMode: (Int) -> Unit, onDismiss
                         style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
                         textAlign = androidx.compose.ui.text.style.TextAlign.Center,
                     )
-                    // Lock in the corner toggles drag mode for every stroke.
-                    FilledTonalIconButton({ dragLock = !dragLock }, Modifier.align(Alignment.TopEnd).padding(6.dp).size(36.dp),
-                        colors = if (dragLock) IconButtonDefaults.filledTonalIconButtonColors(containerColor = MaterialTheme.colorScheme.primary, contentColor = MaterialTheme.colorScheme.onPrimary) else IconButtonDefaults.filledTonalIconButtonColors()) {
-                        Icon(if (dragLock) Icons.Filled.Lock else Icons.Filled.LockOpen, "drag lock", Modifier.size(18.dp))
-                    }
+                }
+                // Lock in the corner toggles drag mode for every stroke. It is a sibling drawn above the
+                // pad, not a child of it: the pad's interop filter would swallow the tap otherwise.
+                if (mode == 0) FilledTonalIconButton({ dragLock = !dragLock }, Modifier.align(Alignment.TopEnd).padding(6.dp).size(40.dp),
+                    colors = if (dragLock) IconButtonDefaults.filledTonalIconButtonColors(containerColor = MaterialTheme.colorScheme.primary, contentColor = MaterialTheme.colorScheme.onPrimary) else IconButtonDefaults.filledTonalIconButtonColors()) {
+                    Icon(if (dragLock) Icons.Filled.Lock else Icons.Filled.LockOpen, "drag lock", Modifier.size(20.dp))
                 }
             }
             val b by AppWindows.brightness.collectAsStateWithLifecycle()
@@ -505,7 +515,7 @@ private fun BoxScope.TouchpadOverlay(mode: Int, onMode: (Int) -> Unit, onDismiss
                 Small(Icons.Filled.Refresh, "re-open app") { fid?.let { AppWindows.relaunch(it) } }
             }
             // Arrow keys for suggestion strips / menus that need a keyboard cursor.
-            DPad(Modifier.size(112.dp)) { AppWindows.arrow(it) }
+            DPad(Modifier.size(112.dp)) { AppWindows.arrow(it, asGamepad = mode != 0) }
             }
         }
     }
@@ -545,14 +555,21 @@ private class PhoneTouchpad {
                 when (e.pointerCount) {
                     1 -> { val a = 1f + (abs(dx) + abs(dy)) / 40f; AppWindows.cursorMove(dx * gain * a, dy * gain * a) }
                     2 -> {
-                        scrollAcc += dy; scrollAccX += dx
-                        if (abs(scrollAcc) > 24f) { AppWindows.scroll(0f, if (scrollAcc > 0) 1f else -1f); scrollAcc = 0f }
-                        if (abs(scrollAccX) > 24f) { AppWindows.scroll(if (scrollAccX > 0) 1f else -1f, 0f); scrollAccX = 0f }
+                        if (AppWindows.mouseMode.value) {
+                            scrollAcc += dy; scrollAccX += dx
+                            if (abs(scrollAcc) > 24f) { AppWindows.scroll(0f, if (scrollAcc > 0) 1f else -1f); scrollAcc = 0f }
+                            if (abs(scrollAccX) > 24f) { AppWindows.scroll(if (scrollAccX > 0) 1f else -1f, 0f); scrollAccX = 0f }
+                        } else {
+                            // Content follows the fingers, as a finger drag at the cursor.
+                            AppWindows.scrollMove(dx * 1.5f, dy * 1.5f)
+                        }
                     }
                 }
             }
+            MotionEvent.ACTION_POINTER_UP -> if (e.pointerCount == 2) AppWindows.scrollEnd()
             MotionEvent.ACTION_UP -> {
                 val now = SystemClock.uptimeMillis()
+                AppWindows.scrollEnd()
                 if (dragging) { dragging = false; AppWindows.pressUp() }
                 else if (!moved && now - downT < 220) {
                     when (maxFingers) {

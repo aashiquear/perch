@@ -30,6 +30,12 @@ class GlassesPresentation(ctx: Context, display: Display) : Presentation(ctx, di
 
     init {
         window?.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        // Prefer the fastest mode at the panel's native size (Rokid Max: 1920×1080 @ 120 Hz).
+        val w = display.mode.physicalWidth; val h = display.mode.physicalHeight
+        display.supportedModes.filter { it.physicalWidth == w && it.physicalHeight == h }
+            .maxByOrNull { it.refreshRate }?.let { best ->
+                window?.let { win -> win.attributes = win.attributes.apply { preferredDisplayModeId = best.modeId } }
+            }
         glView.setEGLContextClientVersion(2)
         glView.preserveEGLContextOnPause = true
         glView.setRenderer(renderer)

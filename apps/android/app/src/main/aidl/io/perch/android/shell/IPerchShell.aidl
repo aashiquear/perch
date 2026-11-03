@@ -34,6 +34,8 @@ interface IPerchShell {
     int gamepadDeviceId() = 12;
     /** Undo the per-display orientation setting Perch applied; `displayId` -1 = the phone screen (only if Perch changed it). */
     void resetOrientation(int displayId) = 13;
+    /** Hardware brightness of a display (0..1), via `cmd display set-brightness`; returns command output (empty = ok). */
+    String setBrightness(int displayId, float value) = 14;
     /** Shizuku convention: tear the service down. */
     void destroy() = 16777114;
 }
