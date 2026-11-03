@@ -60,6 +60,7 @@ class GlassesPresentation(ctx: Context, display: Display) : Presentation(ctx, di
     /** 0.15..1: multiplies the output colour; black background stays black. */
     fun setBrightness(b: Float) { renderer.brightness = b.coerceIn(0.15f, 1f) }
     fun pinHere(index: Int) = glView.queueEvent { renderer.pinHere(index) }
+    fun setRotation(index: Int, rotation: Int) = glView.queueEvent { renderer.setRotation(index, rotation) }
     fun nudgeWindow(index: Int, dDistance: Float, scale: Float) = glView.queueEvent { renderer.nudge(index, dDistance, scale) }
 
     override fun onStop() {
@@ -81,6 +82,12 @@ private class Layer(val index: Int, val texId: Int, val surfaceTexture: SurfaceT
     @Volatile var h = 0
     @Volatile var widthM = 1f
     @Volatile var heightM = 1f
+    /** Display rotation (Surface.ROTATION_*) the app put its display in; the buffer stays w×h. */
+    @Volatile var rotation = 0
+    val upright: Boolean get() = rotation % 2 == 0
+    /** Logical (as the app sees it) size. */
+    val lw: Int get() = if (upright) w else h
+    val lh: Int get() = if (upright) h else w
 }
 
 class SpatialRenderer(private val panelW: Int, private val panelH: Int) : GLSurfaceView.Renderer {
@@ -154,7 +161,23 @@ class SpatialRenderer(private val panelW: Int, private val panelH: Int) : GLSurf
         if (PerchNative.spacePlacement(space, index, p) == 0) { l.yaw = p[0]; l.pitch = p[1]; l.distance = p[2] }
         l.surfaceTexture.setDefaultBufferSize(w, h)
         l.w = w; l.h = h; l.widthM = widthM; l.heightM = heightM
-        PerchNative.spaceUpsert(space, index, l.kind, w, h, l.yaw, l.pitch, l.distance, widthM, heightM, l.anchor)
+        upsertLogical(l)
+    }
+
+    /** Push the layer to the space with its logical (upright) size and matching metres. */
+    private fun upsertLogical(l: Layer) {
+        val (wm, hm) = if (l.upright) l.widthM to l.heightM else l.heightM to l.widthM
+        PerchNative.spaceUpsert(space, l.index, l.kind, l.lw, l.lh, l.yaw, l.pitch, l.distance, wm, hm, l.anchor)
+    }
+
+    /** The app rotated its display: show it upright and give the window the rotated shape. */
+    fun setRotation(index: Int, rotation: Int) {
+        val l = layers.firstOrNull { it.index == index } ?: return
+        if (l.rotation == rotation) return
+        val p = FloatArray(5)
+        if (PerchNative.spacePlacement(space, index, p) == 0) { l.yaw = p[0]; l.pitch = p[1]; l.distance = p[2] }
+        l.rotation = rotation
+        upsertLogical(l)
     }
 
     /** Move a window nearer/further (metres along its ray) and/or scale it (same as the Linux bar). */
@@ -165,10 +188,12 @@ class SpatialRenderer(private val panelW: Int, private val panelH: Int) : GLSurf
         if (PerchNative.spacePlacement(space, index, p) == 0) {
             l.yaw = p[0]; l.pitch = p[1]; l.distance = p[2]; l.widthM = p[3]; l.heightM = p[4]
         }
+        // Placement metres come back in logical orientation; store them in buffer orientation.
+        if (!l.upright) { val t = l.widthM; l.widthM = l.heightM; l.heightM = t }
         l.distance = (l.distance + dDistance).coerceIn(0.6f, 6f)
         l.widthM = (l.widthM * scale).coerceIn(0.2f, 6f)
         l.heightM = (l.heightM * scale).coerceIn(0.2f, 6f)
-        PerchNative.spaceUpsert(space, index, l.kind, l.w, l.h, l.yaw, l.pitch, l.distance, l.widthM, l.heightM, l.anchor)
+        upsertLogical(l)
     }
 
     fun setCursor(index: Int?, u: Float, v: Float) { cursorIndex = index; cursorU = u; cursorV = v }
@@ -201,7 +226,7 @@ class SpatialRenderer(private val panelW: Int, private val panelH: Int) : GLSurf
                     (homog[3] * u + homog[4] * v + homog[5]) / w,
                 )
             }
-            fillQuad()
+            fillQuad(layer.rotation)
             GLES20.glActiveTexture(GLES20.GL_TEXTURE0)
             GLES20.glBindTexture(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, layer.texId)
             GLES20.glUniform1i(uTex, 0)
@@ -253,16 +278,29 @@ class SpatialRenderer(private val panelW: Int, private val panelH: Int) : GLSurf
     }
 
     /** Same math as perch-compositor::quad_to_vertices. */
-    private fun fillQuad() {
+    /**
+     * Logical (upright content) UV → buffer UV for a display rotation. Derived
+     * from a phone turned the same way: ROTATION_90 puts the content's top
+     * along the buffer's right edge, ROTATION_270 along its left edge.
+     */
+    private fun bufferUv(rot: Int, u: Float, v: Float): Pair<Float, Float> = when (rot) {
+        1 -> (1f - v) to u
+        2 -> (1f - u) to (1f - v)
+        3 -> v to (1f - u)
+        else -> u to v
+    }
+
+    private fun fillQuad(rot: Int) {
         val uv = floatArrayOf(0f, 0f, 1f, 0f, 1f, 1f, 0f, 1f)
         val order = intArrayOf(0, 1, 2, 0, 2, 3)
         verts.position(0)
         for (i in order) {
             val u = uv[i * 2]; val v = uv[i * 2 + 1]
+            val (bu, bv) = bufferUv(rot, u, v)
             val w = homog[6] * u + homog[7] * v + homog[8]
             val x = corners[i * 2] / panelW * 2f - 1f
             val y = 1f - corners[i * 2 + 1] / panelH * 2f
-            verts.put(x * w).put(y * w).put(w).put(u).put(v)
+            verts.put(x * w).put(y * w).put(w).put(bu).put(bv)
         }
         verts.position(0)
     }

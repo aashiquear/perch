@@ -1,7 +1,7 @@
 # Use cases — how to do each thing with Perch today
 
 Each section is a recipe for a real session. Linux/GNOME is the host that
-works end to end (v0.1.0); the Android host is in development (see
+works end to end (v0.1.0); the Android host works on the S24 Ultra (see
 [ANDROID.md](ANDROID.md)). Keyboard chords are the Linux defaults
 (`[input]` in `perchd.toml`).
 
@@ -63,7 +63,7 @@ sees. Keep notes on the glasses (Ctrl+Alt+H), slides on the projector. The
 phone/iPad touchpad app (mDNS, no pairing beyond the token) lets you drive
 the laptop from the sofa.
 
-## 6. Phone as host (Android, in development)
+## 6. Phone as host (Android)
 
 The phone drives the glasses alone: USB-C video + IMU, Perch's Android app
 renders the same 3DOF windows. Choose apps from the Perch panel; each runs

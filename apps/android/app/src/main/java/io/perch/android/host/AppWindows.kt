@@ -37,9 +37,24 @@ object AppWindows {
         val portrait: Boolean,
         /** The app set FLAG_SECURE: the display shows black. Nothing a non-system app can do about it. */
         val secure: Boolean = false,
+        /** Surface.ROTATION_* the app put its display in (the display rotates with content). */
+        val rotation: Int = 0,
     ) {
-        val width: Int get() = if (portrait) PORTRAIT_W else PORTRAIT_H
-        val height: Int get() = if (portrait) PORTRAIT_H else PORTRAIT_W
+        /** Buffer size (what the display was created with). */
+        val bufW: Int get() = if (portrait) PORTRAIT_W else PORTRAIT_H
+        val bufH: Int get() = if (portrait) PORTRAIT_H else PORTRAIT_W
+        /** Logical size the app sees; cursor and injected touches use this. */
+        val width: Int get() = if (rotation % 2 == 0) bufW else bufH
+        val height: Int get() = if (rotation % 2 == 0) bufH else bufW
+        val landscape: Boolean get() = width > height
+    }
+
+    /** From the service's display listener. */
+    fun onDisplayRotation(displayId: Int, rotation: Int) {
+        val win = windows.value.firstOrNull { it.displayId == displayId } ?: return
+        if (win.rotation == rotation) return
+        windows.value = windows.value.map { if (it.id == win.id) it.copy(rotation = rotation) else it }
+        GlassesService.presentation?.setRotation(win.layer, rotation)
     }
 
     val windows: MutableStateFlow<List<Win>> = MutableStateFlow(emptyList())
@@ -111,10 +126,10 @@ object AppWindows {
         val win = windows.value.firstOrNull { it.id == id } ?: return
         val shell = ShellBridge.shell.value ?: return
         val flipped = win.copy(portrait = !win.portrait)
-        val ok = try { shell.resizeDisplay(win.displayId, flipped.width, flipped.height, DPI) } catch (e: Throwable) { false }
+        val ok = try { shell.resizeDisplay(win.displayId, flipped.bufW, flipped.bufH, DPI) } catch (e: Throwable) { false }
         if (!ok) { lastError.value = "resize failed"; return }
-        val (wm, hm) = metres(flipped.width, flipped.height)
-        GlassesService.presentation?.resizeWindow(win.layer, flipped.width, flipped.height, wm, hm)
+        val (wm, hm) = metres(flipped.bufW, flipped.bufH)
+        GlassesService.presentation?.resizeWindow(win.layer, flipped.bufW, flipped.bufH, wm, hm)
         windows.value = windows.value.map { if (it.id == id) flipped else it }
     }
 

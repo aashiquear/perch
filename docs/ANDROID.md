@@ -7,9 +7,11 @@ display with GL. The phone's own screen is the **panel**: the same dashboard
 as the Linux control panel — pick apps, see the layout, move things, a
 pop-up touchpad.
 
-Status (Nov 2026): designed and implemented against the APIs below; **not
-yet verified on the S24 Ultra** (that is what the debug APK is for). Facts
-that are device-specific are marked *to verify*.
+Status (3 Nov 2026): **working on a Samsung S24 Ultra (Android 16, One UI
+8.5)**: 3DOF tracking, multi-app windows, touchpad, keyboard, Bluetooth
+input and the virtual gamepad (verified in Chrome's gamepad tester, GeForce
+NOW and Xbox Cloud Gaming). The "Findings" section at the end is the record
+of what was measured on the device.
 
 ## What an app can and cannot do without root
 
@@ -76,10 +78,9 @@ phone screen (panel, Compose)             glasses display (Presentation + GL)
   swipe = next/previous window) moves a cursor drawn by the renderer in the
   focused window; taps become touch events injected at the cursor, scrolls
   become mouse-wheel events, both routed to that window's display id.
-  Keyboard: a Bluetooth keyboard paired with the phone types into the focused
-  display's app once it has focus (`OWN_FOCUS`); the panel's text field
-  injects key events as a fallback. *To verify: key routing to a trusted
-  display with OWN_FOCUS on One UI.*
+  Keyboard: a Bluetooth keyboard paired with the phone is forwarded to the
+  focused window as key events while Perch is on screen; a mouse uses
+  pointer capture so it never clicks the panel.
 - **Focus** = the window last tapped on the panel's list, or 3-finger swipe.
 - **Recenter**: temple button (IMU key event) or panel button. Calibration
   saved to app storage, same JSON as Linux.
@@ -109,13 +110,9 @@ adb install -r app/build/outputs/apk/debug/app-debug.apk
 On the phone: install Shizuku, start it (Wireless debugging), open Perch →
 allow Shizuku → plug the glasses → **Start** → **Add app**.
 
-Things to verify on the device (not yet done):
-1. `RokidAir::new(fd)` over `UsbManager` fd and the IMU rate on the S24.
-2. Trusted virtual display creation from the Shizuku service (flags
-   `0x400|0x800|0x1000|0x4000`), and `am start --display`.
-3. Injected touch reaching the app on that display; keyboard routing.
-4. DeX auto-start when the glasses are plugged in: turn off "Auto start DeX
-   when HDMI/DP is connected", or Samsung draws DeX on the glasses instead.
+All four of the original open questions are settled (see Findings): the USB
+fd path gives 444 Hz, trusted displays and `am start --display` work from the
+helper, injected touch and keys reach the app, and DeX auto-start must be off.
 
 Sources: AOSP activity launch policy
 (https://source.android.com/docs/core/display/multi_display/activity-launch),
@@ -126,9 +123,13 @@ Shizuku user-service docs.
 
 - Trusted display creation, `am start --display` and touch injection all work
   from the Shizuku helper once it claims package `com.android.shell`.
-- Each app display gets `wm set-ignore-orientation-request true`, so a
-  portrait-locked app on a landscape window is letterboxed (DeX behaviour)
-  instead of rotating the whole display.
+- App displays **rotate with their content** (`FLAG_ROTATES_WITH_CONTENT`):
+  YouTube's fullscreen turns its display landscape, a portrait-locked app
+  turns a landscape display portrait. The buffer keeps its size with the
+  picture rotated inside it; the renderer maps the texture back upright
+  (`bufferUv`) and gives the window the logical shape. `wm
+  set-ignore-orientation-request` is no longer used (it is persisted per
+  display and leaked into the phone's own behaviour).
 - Home and Recents keys act on the phone's own display, not the window, so the
   touchpad offers Back, next window, rotate, bigger/smaller, nearer/further and
   re-open instead.
@@ -142,11 +143,33 @@ Shizuku user-service docs.
 - A Bluetooth mouse uses pointer capture on the panel (`requestPointerCapture`):
   the phone's pointer disappears and relative motion drives the glasses
   cursor, so clicks never land on the panel. The panel switch releases it.
-- Virtual gamepad: a UHID device ("Perch Gamepad", Xbox-like descriptor) is
-  created from the shell helper only so `InputDevice.getDevice(id)` reports a
-  real controller; joystick/button events are injected per display with that
-  device id (SOURCE_JOYSTICK|GAMEPAD, AXIS_X/Y/Z/RZ, BRAKE/GAS, HAT). Three
-  skins (Xbox, racing wheel, flight stick) map onto the same axes.
+- Virtual gamepad: a UHID device ("Perch Gamepad", vendor 045e / product
+  02fd, Xbox-like descriptor) created from the shell helper. Android applies
+  `Vendor_045e_Product_02fd.kl`; sources KEYBOARD|GAMEPAD|JOYSTICK, all axes
+  present (X/Y/Z/RZ, BRAKE→LTRIGGER, GAS→RTRIGGER, HAT). The pop-up writes
+  **HID input reports** to it (13 bytes), so games get kernel-level
+  controller input. Kernel events go to Android's *focused display*; the
+  pop-up is therefore a separate non-focusable window in gamepad modes (so
+  tapping it does not pull focus to the phone) and Perch forwards any
+  controller events that still reach it. Injection with the device id
+  remains as fallback. LT/RT drive the analog trigger axes as well.
+- Keyboard: the soft keyboard is only shown when the phone holds an IME
+  target window, so the pop-up is *focusable* in Touchpad mode (typing works
+  as on a phone) and non-focusable only for gamepad modes. The keyboard
+  button under the d-pad opens a typing bar whose text is converted to key
+  events for the focused window, independent of whether the app asked for an
+  IME (Word's canvas does not).
+- Brightness: Android 16 accepts `cmd display set-brightness --id <glasses>`
+  but the Rokid panel ignores the value; the slider is software dimming in
+  the renderer. The 1920×1080 @120 Hz mode is requested via
+  `preferredDisplayModeId`.
+- Tracking: the one-off calibration leaves a slowly wandering yaw bias; the
+  tracker now learns the bias online whenever the glasses are still
+  (`TrackerConfig.auto_bias`), after which drift is negligible.
+- Scroll: two-finger movement is a finger drag at the cursor (Touch mode) or
+  wheel events (Mouse mode); the scroll-lock corner shows spring-back
+  scrollers that send wheel events, which apps with their own scroll bars
+  (Word) honour.
 - Glasses "brightness" is software dimming in the renderer (colour × factor);
   the Rokid driver exposes no hardware brightness, the temple rocker does.
 - `wm set-ignore-orientation-request` is reset on each display before it is

@@ -65,7 +65,7 @@ and use Perch only for side windows (M3: passthrough/exclusive mode).
 
 Two very different ways to use the phone:
 
-### A. Phone as host (Perch owns the glasses) — see docs/ANDROID.md
+### A. Phone as host (Perch owns the glasses) — working; see docs/ANDROID.md
 `GlassesService` opens the Rokid USB interface (permission prompt once;
 auto-launch via `device_filter.xml`), runs the tracker on a dedicated thread,
 and shows a `Presentation` on the external display with the GL renderer.

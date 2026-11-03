@@ -85,7 +85,7 @@ class PerchShellService(private val context: Context) : IPerchShell.Stub() {
     override fun createDisplay(name: String, width: Int, height: Int, dpi: Int, surface: Surface): Int {
         val flags = DisplayManager.VIRTUAL_DISPLAY_FLAG_PUBLIC or
             DisplayManager.VIRTUAL_DISPLAY_FLAG_OWN_CONTENT_ONLY or
-            FLAG_SUPPORTS_TOUCH or FLAG_DESTROY_CONTENT_ON_REMOVAL or
+            FLAG_SUPPORTS_TOUCH or FLAG_ROTATES_WITH_CONTENT or FLAG_DESTROY_CONTENT_ON_REMOVAL or
             FLAG_TRUSTED or FLAG_OWN_DISPLAY_GROUP or FLAG_ALWAYS_UNLOCKED or
             FLAG_TOUCH_FEEDBACK_DISABLED or FLAG_OWN_FOCUS
         return try {
@@ -93,12 +93,8 @@ class PerchShellService(private val context: Context) : IPerchShell.Stub() {
             val id = vd.display.displayId
             displays[id] = vd
             Log.i(TAG, "display $id: $name ${width}x$height@$dpi flags=0x${flags.toString(16)}")
-            // Portrait-locked apps (Instagram…) on a landscape display get letterboxed
-            // instead of the whole display rotating with them. Same as DeX.
-            if (phoneIgnoredOrientation == null) {
-                phoneIgnoredOrientation = sh("wm", "get-ignore-orientation-request", "-d", "0").contains("true")
-            }
-            sh("wm", "set-ignore-orientation-request", "true", "-d", id.toString())
+            // The display rotates with its app (YouTube fullscreen → landscape); the
+            // renderer turns the picture upright and swaps the window's shape.
             id
         } catch (e: Throwable) {
             Log.e(TAG, "createVirtualDisplay failed: $e")

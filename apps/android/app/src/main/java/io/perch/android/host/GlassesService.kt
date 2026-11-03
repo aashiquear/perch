@@ -281,7 +281,11 @@ class GlassesService : Service() {
         displayListener = object : DisplayManager.DisplayListener {
             override fun onDisplayAdded(id: Int) = attach()
             override fun onDisplayRemoved(id: Int) = attach()
-            override fun onDisplayChanged(id: Int) {}
+            override fun onDisplayChanged(id: Int) {
+                // An app display rotated with its content (YouTube fullscreen, a portrait-locked app).
+                val rot = runCatching { dm.getDisplay(id)?.rotation }.getOrNull() ?: return
+                AppWindows.onDisplayRotation(id, rot)
+            }
         }.also { dm.registerDisplayListener(it, null) }
         attach()
     }

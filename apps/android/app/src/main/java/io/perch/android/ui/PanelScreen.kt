@@ -42,6 +42,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Popup
 import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.foundation.text.KeyboardActions
@@ -214,7 +216,7 @@ fun PanelScreen(ctx: Context, onMirror: () -> Unit) {
                     AppIcon(w.icon)
                     Column(Modifier.weight(1f)) {
                         Text((if (isFocused) "● " else "○ ") + w.label, fontWeight = FontWeight.SemiBold)
-                        Text(if (w.portrait) "portrait ${w.width}×${w.height}" else "landscape ${w.width}×${w.height}", style = MaterialTheme.typography.bodySmall)
+                        Text((if (w.landscape) "landscape" else "portrait") + " ${w.width}×${w.height}" + (if (w.rotation != 0) " · app rotated" else ""), style = MaterialTheme.typography.bodySmall)
                         if (w.secure) Text("blank on the glasses: this app blocks screen projection (FLAG_SECURE)", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
                     }
                     IconButton({ AppWindows.flip(w.id) }) { Icon(Icons.Filled.ScreenRotation, "portrait / landscape") }
@@ -344,6 +346,41 @@ private fun TypeBar(onClose: () -> Unit) {
         )
         FilledTonalIconButton({ AppWindows.key(KeyEvent.KEYCODE_ENTER); text = "" }, Modifier.size(40.dp)) { Icon(Icons.AutoMirrored.Filled.KeyboardReturn, "enter") }
         IconButton(onClose, Modifier.size(36.dp)) { Icon(Icons.Filled.Close, "close keyboard") }
+    }
+}
+
+/**
+ * A spring-back scroller: drag the knob away from the middle and the content
+ * scrolls that way (as mouse-wheel events, which both ordinary views and apps
+ * with their own scroll bars, like Word, honour); let go and it recentres.
+ */
+@Composable
+private fun ScrollBar(vertical: Boolean, modifier: Modifier, onValue: (Float) -> Unit) {
+    var pos by remember { mutableFloatStateOf(0f) }   // -1..1 along the bar
+    var lengthPx by remember { mutableIntStateOf(0) }
+    val knobPx = with(LocalDensity.current) { 28.dp.toPx() }
+    val half = (lengthPx / 2f - knobPx / 2f).coerceAtLeast(1f)
+    Box(
+        modifier.clip(RoundedCornerShape(15.dp)).background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.95f))
+            .onSizeChanged { lengthPx = if (vertical) it.height else it.width }
+            .pointerInput(vertical, half) {
+                detectDragGestures(
+                    onDragEnd = { pos = 0f; onValue(0f) }, onDragCancel = { pos = 0f; onValue(0f) },
+                ) { change, drag ->
+                    change.consume()
+                    val d = if (vertical) drag.y else drag.x
+                    pos = (pos + d / half).coerceIn(-1f, 1f)
+                    onValue(pos)
+                }
+            },
+        contentAlignment = Alignment.Center,
+    ) {
+        Box(
+            Modifier.offset {
+                val px = (pos * half).toInt()
+                if (vertical) androidx.compose.ui.unit.IntOffset(0, px) else androidx.compose.ui.unit.IntOffset(px, 0)
+            }.size(28.dp).clip(androidx.compose.foundation.shape.CircleShape).background(MaterialTheme.colorScheme.primary),
+        )
     }
 }
 
@@ -523,6 +560,21 @@ private fun BoxScope.TouchpadOverlay(ctx: Context, mode: Int, onMode: (Int) -> U
             val gestures = remember { PhoneTouchpad() }
             var dragLock by remember { mutableStateOf(false) }
             var typing by remember { mutableStateOf(false) }
+            var scrollLock by remember { mutableStateOf(false) }
+            // Scroll-lock scrollers: displacement → wheel events, ticking while held.
+            val scrollV = remember { mutableFloatStateOf(0f) }
+            val scrollH = remember { mutableFloatStateOf(0f) }
+            LaunchedEffect(scrollLock) {
+                while (scrollLock) {
+                    val vy = scrollV.floatValue; val vx = scrollH.floatValue
+                    if (vx != 0f || vy != 0f) {
+                        // Quadratic response: fine control near the middle, fast at the ends (≈ 25 lines/s max).
+                        fun curve(v: Float) = v * abs(v) * 0.8f
+                        AppWindows.scroll(curve(vx), -curve(vy))
+                    }
+                    kotlinx.coroutines.delay(32)
+                }
+            }
             gestures.dragLock = dragLock
             // Pad height follows the screen: ~30 % of it, so the bars below stay reachable.
             val padH = (LocalConfiguration.current.screenHeightDp * 0.30f).dp.coerceIn(170.dp, 320.dp)
@@ -530,8 +582,10 @@ private fun BoxScope.TouchpadOverlay(ctx: Context, mode: Int, onMode: (Int) -> U
             gestures.edgePx = edge
             Box(Modifier.fillMaxWidth().then(if (mode == 0) Modifier.height(padH) else Modifier.wrapContentHeight())) {
                 if (mode != 0) GamepadSkin(mode)
-                else Box(
-                    Modifier.fillMaxSize().clip(RoundedCornerShape(16.dp))
+                else Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Row(Modifier.weight(1f).fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                Box(
+                    Modifier.weight(1f).fillMaxHeight().clip(RoundedCornerShape(16.dp))
                         .background(MaterialTheme.colorScheme.surfaceVariant)
                         // Thin rim: a stroke that starts here is a drag (press held while you slide).
                         .border(22.dp, if (dragLock) Color(0x553F51B5) else Color(0x332196F3), RoundedCornerShape(16.dp))
@@ -546,11 +600,21 @@ private fun BoxScope.TouchpadOverlay(ctx: Context, mode: Int, onMode: (Int) -> U
                         textAlign = androidx.compose.ui.text.style.TextAlign.Center,
                     )
                 }
-                // Lock in the corner toggles drag mode for every stroke. It is a sibling drawn above the
-                // pad, not a child of it: the pad's interop filter would swallow the tap otherwise.
-                if (mode == 0) FilledTonalIconButton({ dragLock = !dragLock }, Modifier.align(Alignment.TopEnd).padding(6.dp).size(40.dp),
-                    colors = if (dragLock) IconButtonDefaults.filledTonalIconButtonColors(containerColor = MaterialTheme.colorScheme.primary, contentColor = MaterialTheme.colorScheme.onPrimary) else IconButtonDefaults.filledTonalIconButtonColors()) {
-                    Icon(if (dragLock) Icons.Filled.Lock else Icons.Filled.LockOpen, "drag lock", Modifier.size(20.dp))
+                if (scrollLock) ScrollBar(vertical = true, Modifier.width(30.dp).fillMaxHeight()) { scrollV.floatValue = it }
+                }
+                if (scrollLock) ScrollBar(vertical = false, Modifier.height(30.dp).fillMaxWidth()) { scrollH.floatValue = it }
+                }
+                // Locks in the corners toggle drag mode / the scrollers. They are siblings drawn above
+                // the pad, not children of it: the pad's interop filter would swallow the tap otherwise.
+                if (mode == 0) {
+                    FilledTonalIconButton({ dragLock = !dragLock }, Modifier.align(Alignment.TopEnd).padding(6.dp).size(40.dp),
+                        colors = if (dragLock) IconButtonDefaults.filledTonalIconButtonColors(containerColor = MaterialTheme.colorScheme.primary, contentColor = MaterialTheme.colorScheme.onPrimary) else IconButtonDefaults.filledTonalIconButtonColors()) {
+                        Icon(if (dragLock) Icons.Filled.Lock else Icons.Filled.LockOpen, "drag lock", Modifier.size(20.dp))
+                    }
+                    FilledTonalIconButton({ scrollLock = !scrollLock; scrollV.floatValue = 0f; scrollH.floatValue = 0f }, Modifier.align(Alignment.TopStart).padding(6.dp).size(40.dp),
+                        colors = if (scrollLock) IconButtonDefaults.filledTonalIconButtonColors(containerColor = MaterialTheme.colorScheme.primary, contentColor = MaterialTheme.colorScheme.onPrimary) else IconButtonDefaults.filledTonalIconButtonColors()) {
+                        Icon(Icons.Filled.SwapVert, "scroll lock", Modifier.size(20.dp))
+                    }
                 }
             }
             val b by AppWindows.brightness.collectAsStateWithLifecycle()

@@ -25,8 +25,9 @@ definition of done you can verify on your own hardware.
 - [ ] Confirm axis signs (left turn → +yaw). Add `tracker.invert_axes` if needed.
 - [ ] Measure FOV (procedure in DEVICE-ROKID-MAX.md) and set the default.
 - [ ] Temple button events on Max — do they arrive? If not, drop the mapping.
-- [ ] Android: USB permission + fd path + 1 kHz thread; verify no frame drops.
-- [ ] Tune `kp/ki`; try `use_mag=true` and decide.
+- [x] Android: USB permission + fd path + IMU thread (444 Hz on the S24 Ultra, 2026-11-01); multi-app, touchpad, keyboard, gamepad verified (2026-11-02).
+- [x] Online gyro-bias learning while still (`auto_bias`, 2026-11-02); `use_mag` stays off.
+- [ ] Tune `kp/ki`.
 
 ## M2 — Real pixels (Linux capture) 
 **Done when:** `coding` preset shows three *actual* windows from the laptop

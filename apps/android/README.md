@@ -32,14 +32,21 @@ Unit tests: `./gradlew testDebugUnitTest` (postcard byte parity with Rust).
 
 1. Install [Shizuku](https://shizuku.rikka.app) and start it (Wireless
    debugging; pair once). Perch needs it to open *other* apps on glasses
-   displays — see `docs/ANDROID.md` for why.
+   displays — see `docs/ANDROID.md` for why. On Samsung turn off DeX
+   auto-start for external displays.
 2. Open Perch; on the Shizuku card tap to allow. Plug in the glasses, accept
    the USB prompt, **Start**. Status shows `tracking Rokid Max`.
-3. **Calibrate** with the glasses on a table (20 s). Saved to app storage.
+3. **Calibrate** with the glasses on a table (20 s). Saved to app storage;
+   the tracker keeps refining the bias whenever the glasses are still.
 4. **Add app** → pick an app (portrait or landscape) → it opens on its own
    display in the glasses, straight ahead. Add more; tap a card to focus.
-5. **Touchpad** → move the cursor in the focused window; tap, scroll,
-   3-finger swipe to switch windows. ⟳ flips portrait/landscape, ✕ closes.
+   Apps rotate their window as they would a phone (YouTube fullscreen).
+5. **Touchpad** → the pop-up: chips for Touchpad / Xbox / Wheel / Flight.
+   Pad: one finger moves the cursor, tap, two-finger scroll, three-finger
+   swipe to switch window; corner locks for drag mode and spring-back
+   scrollers; Touch or Mouse mode. Below: glasses brightness, the control
+   bar (back, next, pin, rotate, bigger/smaller, nearer/further, re-open),
+   an arrow pad and a keyboard button that types into the focused window.
 6. A Bluetooth keyboard / mouse / gamepad paired to the phone goes to the
    focused glasses window while Perch is in front (switch in the panel).
 7. ✕ on a window card ends the app's tasks on that display and releases it;
@@ -48,7 +55,9 @@ Unit tests: `./gradlew testDebugUnitTest` (postcard byte parity with Rust).
 
 Debugging without adb: a crash shows as a red card at the top of the panel on
 the next launch (from `files/crash.txt`); helper-side failures show under the
-buttons with the real exception text.
+buttons with the real exception text. With adb (USB or Wireless debugging),
+`adb logcat -s PerchShell UhidGamepad AppWindows GlassesService InputDispatcher`
+shows the helper, the controller and where Android delivered each event.
 
 ## Build on this machine without Android Studio
 
