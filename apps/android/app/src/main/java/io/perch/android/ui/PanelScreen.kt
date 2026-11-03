@@ -42,6 +42,11 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Popup
 import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.material.icons.automirrored.filled.KeyboardReturn
 import androidx.compose.ui.window.PopupProperties
 import androidx.core.graphics.drawable.toBitmap
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -312,6 +317,36 @@ private fun DPad(modifier: Modifier, onKey: (Int) -> Unit) {
     }
 }
 
+/**
+ * A text field on the phone whose content is forwarded, as you type, to the
+ * focused glasses window: the phone keyboard appears for it regardless of
+ * whether the app over there managed to request one.
+ */
+@Composable
+private fun TypeBar(onClose: () -> Unit) {
+    var text by remember { mutableStateOf("") }
+    val fr = remember { FocusRequester() }
+    LaunchedEffect(Unit) { runCatching { fr.requestFocus() } }
+    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+        OutlinedTextField(
+            text,
+            { new ->
+                if (new.length > text.length && new.startsWith(text)) AppWindows.typeText(new.substring(text.length))
+                else if (new.length < text.length && text.startsWith(new)) repeat(text.length - new.length) { AppWindows.key(KeyEvent.KEYCODE_DEL) }
+                else { // mid-string edit: resend nothing, just keep the field in sync
+                }
+                text = if (new.length > 120) "" else new
+            },
+            modifier = Modifier.weight(1f).focusRequester(fr), singleLine = true,
+            placeholder = { Text("type here → focused window") },
+            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
+            keyboardActions = KeyboardActions(onSend = { AppWindows.key(KeyEvent.KEYCODE_ENTER); text = "" }),
+        )
+        FilledTonalIconButton({ AppWindows.key(KeyEvent.KEYCODE_ENTER); text = "" }, Modifier.size(40.dp)) { Icon(Icons.AutoMirrored.Filled.KeyboardReturn, "enter") }
+        IconButton(onClose, Modifier.size(36.dp)) { Icon(Icons.Filled.Close, "close keyboard") }
+    }
+}
+
 /** Compact icon button with a one-word caption under it. */
 @Composable
 private fun Small(icon: ImageVector, label: String, onClick: () -> Unit) {
@@ -487,6 +522,7 @@ private fun BoxScope.TouchpadOverlay(ctx: Context, mode: Int, onMode: (Int) -> U
             }
             val gestures = remember { PhoneTouchpad() }
             var dragLock by remember { mutableStateOf(false) }
+            var typing by remember { mutableStateOf(false) }
             gestures.dragLock = dragLock
             // Pad height follows the screen: ~30 % of it, so the bars below stay reachable.
             val padH = (LocalConfiguration.current.screenHeightDp * 0.30f).dp.coerceIn(170.dp, 320.dp)
@@ -533,9 +569,17 @@ private fun BoxScope.TouchpadOverlay(ctx: Context, mode: Int, onMode: (Int) -> U
                 Small(Icons.Filled.ArrowUpward, "further") { fid?.let { AppWindows.further(it) } }
                 Small(Icons.Filled.Refresh, "re-open app") { fid?.let { AppWindows.relaunch(it) } }
             }
-            // Arrow keys for suggestion strips / menus that need a keyboard cursor.
-            DPad(Modifier.size(112.dp)) { AppWindows.arrow(it, asGamepad = mode != 0) }
+            // Arrow keys for suggestion strips / menus that need a keyboard cursor; the keyboard
+            // button below opens a typing field here, so the phone's keyboard always appears.
+            Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                DPad(Modifier.size(112.dp)) { AppWindows.arrow(it, asGamepad = mode != 0) }
+                FilledTonalIconButton({ typing = !typing }, Modifier.size(40.dp),
+                    colors = if (typing) IconButtonDefaults.filledTonalIconButtonColors(containerColor = MaterialTheme.colorScheme.primary, contentColor = MaterialTheme.colorScheme.onPrimary) else IconButtonDefaults.filledTonalIconButtonColors()) {
+                    Icon(Icons.Filled.Keyboard, "keyboard", Modifier.size(22.dp))
+                }
             }
+            }
+            if (typing) TypeBar(onClose = { typing = false })
         }
     }
 }

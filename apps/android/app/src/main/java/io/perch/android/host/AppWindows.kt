@@ -518,6 +518,22 @@ object AppWindows {
         if (asGamepad) { gamepadButton(keyCode, true); gamepadButton(keyCode, false) } else key(keyCode)
     }
 
+    /** Type text into the focused window as key events (the phone's own keyboard supplies it). */
+    fun typeText(text: String) {
+        val w = focusedWin() ?: return
+        val shell = ShellBridge.shell.value ?: return
+        val kcm = android.view.KeyCharacterMap.load(android.view.KeyCharacterMap.VIRTUAL_KEYBOARD)
+        for (ch in text) {
+            val events = kcm.getEvents(charArrayOf(ch))
+            if (events == null) {
+                // Not on the virtual keyboard map (emoji, accents): no key sequence exists for it.
+                Log.w(TAG, "typeText: no key events for '$ch'")
+                continue
+            }
+            for (ev in events) runCatching { shell.injectKeyEvent(w.displayId, android.view.KeyEvent(ev)) }
+        }
+    }
+
     /** Back key etc. to the focused app. */
     fun key(keyCode: Int) {
         val w = focusedWin() ?: return

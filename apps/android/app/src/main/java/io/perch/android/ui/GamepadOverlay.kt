@@ -229,12 +229,12 @@ private fun BoxScope.WheelSkin() {
             }
         }
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
-            PadButton("A", KeyEvent.KEYCODE_BUTTON_A, 40.dp, Color(0xFF81C784))
-            PadButton("B", KeyEvent.KEYCODE_BUTTON_B, 40.dp, Color(0xFFE57373))
-            PadButton("X", KeyEvent.KEYCODE_BUTTON_X, 40.dp, Color(0xFF6FA8DC))
-            PadButton("Y", KeyEvent.KEYCODE_BUTTON_Y, 40.dp, Color(0xFFF9D342))
-            PadButton("view", KeyEvent.KEYCODE_BUTTON_SELECT, 40.dp, shape = RoundedCornerShape(10.dp))
-            PadButton("menu", KeyEvent.KEYCODE_BUTTON_START, 40.dp, shape = RoundedCornerShape(10.dp))
+            PadButton("A", KeyEvent.KEYCODE_BUTTON_A, 54.dp, Color(0xFF81C784))
+            PadButton("B", KeyEvent.KEYCODE_BUTTON_B, 54.dp, Color(0xFFE57373))
+            PadButton("X", KeyEvent.KEYCODE_BUTTON_X, 54.dp, Color(0xFF6FA8DC))
+            PadButton("Y", KeyEvent.KEYCODE_BUTTON_Y, 54.dp, Color(0xFFF9D342))
+            PadButton("view", KeyEvent.KEYCODE_BUTTON_SELECT, 46.dp, shape = RoundedCornerShape(10.dp))
+            PadButton("menu", KeyEvent.KEYCODE_BUTTON_START, 46.dp, shape = RoundedCornerShape(10.dp))
         }
     }
 }
@@ -252,14 +252,14 @@ private fun BoxScope.FlightSkin() {
         }
         Column(verticalArrangement = Arrangement.spacedBy(6.dp), horizontalAlignment = Alignment.CenterHorizontally) {
             Hat(76.dp)
-            PadButton("FIRE", KeyEvent.KEYCODE_BUTTON_A, 56.dp, Color(0xFFE57373))
-            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                PadButton("B", KeyEvent.KEYCODE_BUTTON_B, 36.dp)
-                PadButton("X", KeyEvent.KEYCODE_BUTTON_X, 36.dp)
+            PadButton("FIRE", KeyEvent.KEYCODE_BUTTON_A, 68.dp, Color(0xFFE57373))
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                PadButton("B", KeyEvent.KEYCODE_BUTTON_B, 48.dp)
+                PadButton("X", KeyEvent.KEYCODE_BUTTON_X, 48.dp)
             }
-            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                PadButton("L1", KeyEvent.KEYCODE_BUTTON_L1, 36.dp, shape = RoundedCornerShape(10.dp))
-                PadButton("R1", KeyEvent.KEYCODE_BUTTON_R1, 36.dp, shape = RoundedCornerShape(10.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                PadButton("L1", KeyEvent.KEYCODE_BUTTON_L1, 48.dp, shape = RoundedCornerShape(10.dp))
+                PadButton("R1", KeyEvent.KEYCODE_BUTTON_R1, 48.dp, shape = RoundedCornerShape(10.dp))
             }
         }
     }
