@@ -143,42 +143,42 @@ private fun Pedal(label: String, width: Dp, height: Dp, onValue: (Float) -> Unit
 
 @Composable
 private fun BoxScope.XboxSkin() {
-    Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        // Row 1: triggers and bumpers at the top corners, Xbox button in the middle.
+    Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        // Row 1: triggers and bumpers at the corners, Xbox button in the middle.
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
             Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 PadButton("LT", KeyEvent.KEYCODE_BUTTON_L2, 56.dp, shape = RoundedCornerShape(12.dp))
                 PadButton("LB", KeyEvent.KEYCODE_BUTTON_L1, 56.dp, shape = RoundedCornerShape(12.dp))
             }
-            PadButton("ⓧ", KeyEvent.KEYCODE_BUTTON_MODE, 36.dp, Color(0xFF9CCC65))
+            PadButton("ⓧ", KeyEvent.KEYCODE_BUTTON_MODE, 40.dp, Color(0xFF9CCC65))
             Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 PadButton("RB", KeyEvent.KEYCODE_BUTTON_R1, 56.dp, shape = RoundedCornerShape(12.dp))
                 PadButton("RT", KeyEvent.KEYCODE_BUTTON_R2, 56.dp, shape = RoundedCornerShape(12.dp))
             }
         }
-        // Row 2: the two sticks, same size, side by side under the shoulder buttons.
+        // Row 2: the two sticks, stick-click buttons beside them (not below: saves a row).
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly, verticalAlignment = Alignment.CenterVertically) {
-            Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            Row(verticalAlignment = Alignment.Bottom, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                PadButton("L3", KeyEvent.KEYCODE_BUTTON_THUMBL, 34.dp)
                 Stick(118.dp, "L") { x, y -> setAxes(0 to x, 1 to y) }
-                PadButton("L3", KeyEvent.KEYCODE_BUTTON_THUMBL, 32.dp)
             }
-            Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            Row(verticalAlignment = Alignment.Bottom, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                 Stick(118.dp, "R") { x, y -> setAxes(2 to x, 3 to y) }
-                PadButton("R3", KeyEvent.KEYCODE_BUTTON_THUMBR, 32.dp)
+                PadButton("R3", KeyEvent.KEYCODE_BUTTON_THUMBR, 34.dp)
             }
         }
         // Row 3: view / menu and the hat on the left, A B X Y on the right.
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
+                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                     PadButton("view", KeyEvent.KEYCODE_BUTTON_SELECT, 40.dp, shape = RoundedCornerShape(10.dp))
                     PadButton("menu", KeyEvent.KEYCODE_BUTTON_START, 40.dp, shape = RoundedCornerShape(10.dp))
                 }
                 Hat(84.dp)
             }
-            // Diamond: 3 × 3 cells of `cell`, buttons in the middle of each edge, so they never overlap.
-            val btn = 54.dp; val cell = 58.dp
-            Box(Modifier.size(cell * 3)) {
+            // Diamond on a tight 3 × 3 grid: buttons touch but never overlap.
+            val btn = 54.dp; val cell = 52.dp
+            Box(Modifier.size(cell * 2 + btn)) {
                 Box(Modifier.offset(x = cell, y = 0.dp)) { PadButton("Y", KeyEvent.KEYCODE_BUTTON_Y, btn, Color(0xFFF9D342)) }
                 Box(Modifier.offset(x = 0.dp, y = cell)) { PadButton("X", KeyEvent.KEYCODE_BUTTON_X, btn, Color(0xFF6FA8DC)) }
                 Box(Modifier.offset(x = cell * 2, y = cell)) { PadButton("B", KeyEvent.KEYCODE_BUTTON_B, btn, Color(0xFFE57373)) }
@@ -191,76 +191,75 @@ private fun BoxScope.XboxSkin() {
 @Composable
 private fun BoxScope.WheelSkin() {
     var angle by remember { mutableFloatStateOf(0f) }   // degrees, ±180 = full lock
-    Row(Modifier.fillMaxSize(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            PadButton("L", KeyEvent.KEYCODE_BUTTON_L1, 48.dp, shape = RoundedCornerShape(10.dp))
-            Pedal("brake", 56.dp, 150.dp, { setAxis(4, it) })
-        }
-        Box(
-            Modifier.size(200.dp).clip(CircleShape).background(MaterialTheme.colorScheme.surfaceVariant)
-                .pointerInput(Unit) {
-                    val c = Offset(this.size.width / 2f, this.size.height / 2f)
-                    var last = 0f
-                    detectDragGestures(
-                        onDragStart = { last = Math.toDegrees(atan2((it - c).y, (it - c).x).toDouble()).toFloat() },
-                        onDragEnd = { angle = 0f; setAxis(0, 0f) },
-                        onDragCancel = { angle = 0f; setAxis(0, 0f) },
-                    ) { change, _ ->
-                        change.consume()
-                        val a = Math.toDegrees(atan2((change.position - c).y, (change.position - c).x).toDouble()).toFloat()
-                        var d = a - last
-                        if (d > 180f) d -= 360f; if (d < -180f) d += 360f
-                        last = a
-                        angle = (angle + d).coerceIn(-180f, 180f)
-                        setAxis(0, angle / 180f)
-                    }
-                },
-            contentAlignment = Alignment.Center,
-        ) {
-            // Spoke shows the wheel angle.
-            val r = 80f
-            val rad = Math.toRadians((angle - 90f).toDouble())
-            Box(Modifier.offset { androidx.compose.ui.unit.IntOffset((r * cos(rad)).toInt(), (r * sin(rad)).toInt()) }.size(28.dp).clip(CircleShape).background(MaterialTheme.colorScheme.primary))
-            Text("${angle.toInt()}°", style = MaterialTheme.typography.labelSmall)
-        }
-        Column(verticalArrangement = Arrangement.spacedBy(8.dp), horizontalAlignment = Alignment.End) {
-            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                PadButton("R", KeyEvent.KEYCODE_BUTTON_R1, 48.dp, shape = RoundedCornerShape(10.dp))
+    Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                PadButton("L", KeyEvent.KEYCODE_BUTTON_L1, 48.dp, shape = RoundedCornerShape(10.dp))
+                Pedal("brake", 56.dp, 140.dp, { setAxis(4, it) })
             }
-            Pedal("gas", 56.dp, 150.dp, { setAxis(5, it) })
+            Box(
+                Modifier.size(190.dp).clip(CircleShape).background(MaterialTheme.colorScheme.surfaceVariant)
+                    .pointerInput(Unit) {
+                        val c = Offset(this.size.width / 2f, this.size.height / 2f)
+                        var last = 0f
+                        detectDragGestures(
+                            onDragStart = { last = Math.toDegrees(atan2((it - c).y, (it - c).x).toDouble()).toFloat() },
+                            onDragEnd = { angle = 0f; setAxis(0, 0f) },
+                            onDragCancel = { angle = 0f; setAxis(0, 0f) },
+                        ) { change, _ ->
+                            change.consume()
+                            val a = Math.toDegrees(atan2((change.position - c).y, (change.position - c).x).toDouble()).toFloat()
+                            var d = a - last
+                            if (d > 180f) d -= 360f; if (d < -180f) d += 360f
+                            last = a
+                            angle = (angle + d).coerceIn(-180f, 180f)
+                            setAxis(0, angle / 180f)
+                        }
+                    },
+                contentAlignment = Alignment.Center,
+            ) {
+                val r = 76f
+                val rad = Math.toRadians((angle - 90f).toDouble())
+                Box(Modifier.offset { androidx.compose.ui.unit.IntOffset((r * cos(rad)).toInt(), (r * sin(rad)).toInt()) }.size(28.dp).clip(CircleShape).background(MaterialTheme.colorScheme.primary))
+                Text("${angle.toInt()}°", style = MaterialTheme.typography.labelSmall)
+            }
+            Column(verticalArrangement = Arrangement.spacedBy(6.dp), horizontalAlignment = Alignment.End) {
+                PadButton("R", KeyEvent.KEYCODE_BUTTON_R1, 48.dp, shape = RoundedCornerShape(10.dp))
+                Pedal("gas", 56.dp, 140.dp, { setAxis(5, it) })
+            }
         }
-    }
-    Row(Modifier.align(Alignment.BottomCenter), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        PadButton("A", KeyEvent.KEYCODE_BUTTON_A, 40.dp, Color(0xFF81C784))
-        PadButton("B", KeyEvent.KEYCODE_BUTTON_B, 40.dp, Color(0xFFE57373))
-        PadButton("X", KeyEvent.KEYCODE_BUTTON_X, 40.dp, Color(0xFF6FA8DC))
-        PadButton("Y", KeyEvent.KEYCODE_BUTTON_Y, 40.dp, Color(0xFFF9D342))
-        PadButton("≡", KeyEvent.KEYCODE_BUTTON_START, 40.dp)
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
+            PadButton("A", KeyEvent.KEYCODE_BUTTON_A, 40.dp, Color(0xFF81C784))
+            PadButton("B", KeyEvent.KEYCODE_BUTTON_B, 40.dp, Color(0xFFE57373))
+            PadButton("X", KeyEvent.KEYCODE_BUTTON_X, 40.dp, Color(0xFF6FA8DC))
+            PadButton("Y", KeyEvent.KEYCODE_BUTTON_Y, 40.dp, Color(0xFFF9D342))
+            PadButton("view", KeyEvent.KEYCODE_BUTTON_SELECT, 40.dp, shape = RoundedCornerShape(10.dp))
+            PadButton("menu", KeyEvent.KEYCODE_BUTTON_START, 40.dp, shape = RoundedCornerShape(10.dp))
+        }
     }
 }
 
 @Composable
 private fun BoxScope.FlightSkin() {
-    Row(Modifier.fillMaxSize(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
         // Throttle holds its position (no spring-back), like a real quadrant.
-        Pedal("throttle", 64.dp, 220.dp, { setAxis(3, -(it * 2f - 1f)) }, springBack = false)
-        Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Stick(190.dp, "stick") { x, y -> setAxes(0 to x, 1 to y) }
-            // Twist / rudder: horizontal slider that springs back.
+        Pedal("throttle", 64.dp, 200.dp, { setAxis(3, -(it * 2f - 1f)) }, springBack = false)
+        Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            Stick(170.dp, "stick") { x, y -> setAxes(0 to x, 1 to y) }
             var rud by remember { mutableFloatStateOf(0f) }
-            Slider(rud, { rud = it; setAxis(2, it) }, Modifier.width(190.dp), valueRange = -1f..1f, onValueChangeFinished = { rud = 0f; setAxis(2, 0f) })
+            Slider(rud, { rud = it; setAxis(2, it) }, Modifier.width(170.dp), valueRange = -1f..1f, onValueChangeFinished = { rud = 0f; setAxis(2, 0f) })
             Text("rudder", style = MaterialTheme.typography.labelSmall)
         }
-        Column(verticalArrangement = Arrangement.spacedBy(10.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-            Hat(84.dp)
-            PadButton("FIRE", KeyEvent.KEYCODE_BUTTON_A, 60.dp, Color(0xFFE57373))
-            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                PadButton("B", KeyEvent.KEYCODE_BUTTON_B, 40.dp)
-                PadButton("X", KeyEvent.KEYCODE_BUTTON_X, 40.dp)
+        Column(verticalArrangement = Arrangement.spacedBy(6.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+            Hat(76.dp)
+            PadButton("FIRE", KeyEvent.KEYCODE_BUTTON_A, 56.dp, Color(0xFFE57373))
+            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                PadButton("B", KeyEvent.KEYCODE_BUTTON_B, 36.dp)
+                PadButton("X", KeyEvent.KEYCODE_BUTTON_X, 36.dp)
             }
-            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                PadButton("L1", KeyEvent.KEYCODE_BUTTON_L1, 40.dp, shape = RoundedCornerShape(10.dp))
-                PadButton("R1", KeyEvent.KEYCODE_BUTTON_R1, 40.dp, shape = RoundedCornerShape(10.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                PadButton("L1", KeyEvent.KEYCODE_BUTTON_L1, 36.dp, shape = RoundedCornerShape(10.dp))
+                PadButton("R1", KeyEvent.KEYCODE_BUTTON_R1, 36.dp, shape = RoundedCornerShape(10.dp))
             }
         }
     }

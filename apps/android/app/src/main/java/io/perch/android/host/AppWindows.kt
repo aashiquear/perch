@@ -488,6 +488,9 @@ object AppWindows {
         if (hidReady()) {
             val bit = hidButtonBit(keyCode)
             if (bit >= 0) buttonBits = if (down) buttonBits or (1 shl bit) else buttonBits and (1 shl bit).inv()
+            // Triggers are analog on a real pad (Chrome/Web Gamepad read the axes, not L2/R2): drive both.
+            if (keyCode == android.view.KeyEvent.KEYCODE_BUTTON_L2) axes[4] = if (down) 1f else 0f
+            if (keyCode == android.view.KeyEvent.KEYCODE_BUTTON_R2) axes[5] = if (down) 1f else 0f
             else when (keyCode) {
                 android.view.KeyEvent.KEYCODE_DPAD_UP -> axes[7] = if (down) -1f else 0f
                 android.view.KeyEvent.KEYCODE_DPAD_DOWN -> axes[7] = if (down) 1f else 0f

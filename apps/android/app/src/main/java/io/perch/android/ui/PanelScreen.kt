@@ -441,25 +441,31 @@ private fun BoxScope.TouchpadOverlay(ctx: Context, mode: Int, onMode: (Int) -> U
     val windows by AppWindows.windows.collectAsStateWithLifecycle()
     // Scrim: tap outside the pad to close.
     Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.35f)).clickable(onClick = onDismiss))
-    val maxH = (LocalConfiguration.current.screenHeightDp * 0.88f).dp
+    val maxH = (LocalConfiguration.current.screenHeightDp * 0.94f).dp
     Surface(
         Modifier.align(Alignment.BottomCenter).fillMaxWidth().heightIn(max = maxH),
         shape = RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp), tonalElevation = 3.dp, shadowElevation = 8.dp,
     ) {
         // The pad/skin stays fixed; only the control section below scrolls on small phones.
-        Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp).padding(top = 12.dp, bottom = 24.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
-                Row(Modifier.weight(1f).horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    windows.forEach { w ->
-                        FilterChip(selected = focused == w.id, onClick = { AppWindows.focus(w.id) }, label = { Text(w.label) })
+        Column(Modifier.fillMaxWidth().padding(horizontal = 12.dp).padding(top = 4.dp, bottom = 12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            val mouse by AppWindows.mouseMode.collectAsStateWithLifecycle()
+            // One row: input surface chips (+ Touch/Mouse for the pad), close at the end.
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Row(Modifier.weight(1f).horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(4.dp), verticalAlignment = Alignment.CenterVertically) {
+                    listOf("Touchpad", "Xbox", "Wheel", "Flight").forEachIndexed { i, n ->
+                        FilterChip(selected = mode == i, onClick = { onMode(i) }, label = { Text(n) })
+                    }
+                    if (mode == 0) {
+                        Spacer(Modifier.width(6.dp))
+                        FilterChip(selected = !mouse, onClick = { AppWindows.mouseMode.value = false }, label = { Text("Touch") })
+                        FilterChip(selected = mouse, onClick = { AppWindows.mouseMode.value = true }, label = { Text("Mouse") })
                     }
                 }
-                IconButton(onDismiss) { Icon(Icons.Filled.Close, "close touchpad") }
+                IconButton(onDismiss, Modifier.size(36.dp)) { Icon(Icons.Filled.Close, "close touchpad") }
             }
-            // One pop-up, four input surfaces; controls, d-pad and dimming stay the same.
-            Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                listOf("Touchpad", "Xbox", "Racing wheel", "Flight stick").forEachIndexed { i, n ->
-                    FilterChip(selected = mode == i, onClick = { onMode(i) }, label = { Text(n) })
+            if (windows.size > 1) Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                windows.forEach { w ->
+                    FilterChip(selected = focused == w.id, onClick = { AppWindows.focus(w.id) }, label = { Text(w.label) })
                 }
             }
             LaunchedEffect(mode) { if (mode != 0) AppWindows.gamepadAnnounce() }
@@ -472,17 +478,11 @@ private fun BoxScope.TouchpadOverlay(ctx: Context, mode: Int, onMode: (Int) -> U
             val gestures = remember { PhoneTouchpad() }
             var dragLock by remember { mutableStateOf(false) }
             gestures.dragLock = dragLock
-            // Pad height follows the screen: ~34 % of it, so the bars below stay reachable.
-            val padH = (LocalConfiguration.current.screenHeightDp * 0.34f).dp.coerceIn(180.dp, 360.dp)
+            // Pad height follows the screen: ~30 % of it, so the bars below stay reachable.
+            val padH = (LocalConfiguration.current.screenHeightDp * 0.30f).dp.coerceIn(170.dp, 320.dp)
             val edge = with(LocalDensity.current) { 22.dp.toPx() }
             gestures.edgePx = edge
-            val mouse by AppWindows.mouseMode.collectAsStateWithLifecycle()
-            if (mode == 0) Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
-                FilterChip(selected = !mouse, onClick = { AppWindows.mouseMode.value = false }, label = { Text("Touch") })
-                FilterChip(selected = mouse, onClick = { AppWindows.mouseMode.value = true }, label = { Text("Mouse") })
-                Text(if (mouse) "acts as a real mouse (cloud gaming, remote desktop)" else "acts as a finger on the app", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            }
-            Box(Modifier.fillMaxWidth().then(if (mode == 0) Modifier.height(padH) else Modifier.heightIn(min = padH))) {
+            Box(Modifier.fillMaxWidth().then(if (mode == 0) Modifier.height(padH) else Modifier.wrapContentHeight())) {
                 if (mode != 0) GamepadSkin(mode)
                 else Box(
                     Modifier.fillMaxSize().clip(RoundedCornerShape(16.dp))
@@ -495,7 +495,7 @@ private fun BoxScope.TouchpadOverlay(ctx: Context, mode: Int, onMode: (Int) -> U
                 ) {
                     Text(
                         if (dragLock) "DRAG MODE: slide = drag with the button held\ntap the lock to go back" else
-                        "1 finger: move · tap · double-tap+hold: drag\nstart on the rim: drag · 2 fingers: scroll · 3-finger swipe: next window",
+                        (if (mouse) "mouse: " else "touch: ") + "1 finger move · tap · rim or double-tap+hold: drag\n2 fingers: scroll · 3-finger swipe: next window",
                         style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
                         textAlign = androidx.compose.ui.text.style.TextAlign.Center,
                     )
