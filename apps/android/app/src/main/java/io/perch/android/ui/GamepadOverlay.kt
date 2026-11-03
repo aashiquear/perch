@@ -147,13 +147,13 @@ private fun BoxScope.XboxSkin() {
         // Row 1: triggers and bumpers at the top corners, Xbox button in the middle.
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
             Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                PadButton("LT", KeyEvent.KEYCODE_BUTTON_L2, 44.dp, shape = RoundedCornerShape(10.dp))
-                PadButton("LB", KeyEvent.KEYCODE_BUTTON_L1, 44.dp, shape = RoundedCornerShape(10.dp))
+                PadButton("LT", KeyEvent.KEYCODE_BUTTON_L2, 56.dp, shape = RoundedCornerShape(12.dp))
+                PadButton("LB", KeyEvent.KEYCODE_BUTTON_L1, 56.dp, shape = RoundedCornerShape(12.dp))
             }
             PadButton("ⓧ", KeyEvent.KEYCODE_BUTTON_MODE, 36.dp, Color(0xFF9CCC65))
             Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                PadButton("RB", KeyEvent.KEYCODE_BUTTON_R1, 44.dp, shape = RoundedCornerShape(10.dp))
-                PadButton("RT", KeyEvent.KEYCODE_BUTTON_R2, 44.dp, shape = RoundedCornerShape(10.dp))
+                PadButton("RB", KeyEvent.KEYCODE_BUTTON_R1, 56.dp, shape = RoundedCornerShape(12.dp))
+                PadButton("RT", KeyEvent.KEYCODE_BUTTON_R2, 56.dp, shape = RoundedCornerShape(12.dp))
             }
         }
         // Row 2: the two sticks, same size, side by side under the shoulder buttons.

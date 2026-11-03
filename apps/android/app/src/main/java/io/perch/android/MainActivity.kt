@@ -32,6 +32,7 @@ import io.perch.android.touchpad.TouchpadSurface
 import io.perch.android.shell.ShellBridge
 import io.perch.android.ui.PanelScreen
 import io.perch.android.ui.PerchTheme
+import io.perch.android.ui.ThemeMode
 
 class PerchApp : Application() {
     override fun onCreate() {
@@ -65,6 +66,7 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         if (Build.VERSION.SDK_INT >= 33) requestPermissions(arrayOf(android.Manifest.permission.POST_NOTIFICATIONS), 1)
         ShellBridge.install()
+        ThemeMode.load(this)
         window.decorView.setOnCapturedPointerListener { _, ev -> AppWindows.capturedMotion(ev) }
         lifecycleScope.launch {
             combine(AppWindows.routeHardware, AppWindows.focused) { r, f -> r to f }.collect { updatePointerCapture() }

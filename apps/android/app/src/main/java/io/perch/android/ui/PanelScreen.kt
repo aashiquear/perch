@@ -146,6 +146,17 @@ fun PanelScreen(ctx: Context, onMirror: () -> Unit) {
                 Action(Modifier.weight(1f), Icons.Filled.PhoneAndroid, "All back", "release every window") { AppWindows.releaseAll() }
             }
         }
+        item {
+            val themeMode by ThemeMode.mode.collectAsStateWithLifecycle()
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Action(
+                    Modifier.weight(1f),
+                    when (themeMode) { 1 -> Icons.Filled.LightMode; 2 -> Icons.Filled.DarkMode; else -> Icons.Filled.BrightnessAuto },
+                    "Theme: ${ThemeMode.label(themeMode)}", "tap: device → light → dark",
+                ) { ThemeMode.cycle(ctx) }
+                Spacer(Modifier.weight(1f))
+            }
+        }
         if (arrange) item {
             Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                 PresetPicture("1 × 1", listOf(0.46f)) { applyPreset("1 × 1") }

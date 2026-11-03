@@ -1,6 +1,10 @@
 package io.perch.android.ui
 
+import android.content.Context
 import androidx.compose.foundation.isSystemInDarkTheme
+import androidx.compose.runtime.getValue
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import kotlinx.coroutines.flow.MutableStateFlow
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.lightColorScheme
@@ -21,7 +25,21 @@ private val Dark = darkColorScheme(
 )
 private val Light = lightColorScheme(primary = Color(0xFF005E8C), secondary = Color(0xFF2E7D4F))
 
+/** 0 = follow the device, 1 = light, 2 = dark. Persisted in SharedPreferences. */
+object ThemeMode {
+    val mode: MutableStateFlow<Int> = MutableStateFlow(0)
+    fun load(ctx: Context) { mode.value = ctx.getSharedPreferences("perch", Context.MODE_PRIVATE).getInt("theme", 0) }
+    fun set(ctx: Context, m: Int) {
+        mode.value = m
+        ctx.getSharedPreferences("perch", Context.MODE_PRIVATE).edit().putInt("theme", m).apply()
+    }
+    fun cycle(ctx: Context) = set(ctx, (mode.value + 1) % 3)
+    fun label(m: Int) = when (m) { 1 -> "Light"; 2 -> "Dark"; else -> "Device" }
+}
+
 @Composable
 fun PerchTheme(content: @Composable () -> Unit) {
-    MaterialTheme(colorScheme = if (isSystemInDarkTheme()) Dark else Light, content = content)
+    val mode by ThemeMode.mode.collectAsStateWithLifecycle()
+    val dark = when (mode) { 1 -> false; 2 -> true; else -> isSystemInDarkTheme() }
+    MaterialTheme(colorScheme = if (dark) Dark else Light, content = content)
 }
