@@ -321,15 +321,16 @@ object AppWindows {
     val hardwareBrightness: MutableStateFlow<Boolean> = MutableStateFlow(false)
     fun setBrightness(b: Float) {
         brightness.value = b
+        // Software dimming is what visibly works on the Rokid Max (Android accepts a per-display
+        // brightness for it, but the panel ignores the stored value). Set both anyway.
+        GlassesService.presentation?.setBrightness(b)
         val shell = ShellBridge.shell.value
         val did = GlassesService.glassesDisplayId
         if (shell != null && did >= 0) {
             val out = runCatching { shell.setBrightness(did, b) }.getOrElse { it.toString() }
-            if (out.isEmpty()) { hardwareBrightness.value = true; GlassesService.presentation?.setBrightness(1f); return }
-            Log.w(TAG, "hardware brightness: $out")
+            hardwareBrightness.value = out.isEmpty()
+            if (out.isNotEmpty()) Log.w(TAG, "hardware brightness: $out")
         }
-        hardwareBrightness.value = false
-        GlassesService.presentation?.setBrightness(b)
     }
 
     // ---- mouse mode: the cursor is a real mouse to the app (cloud gaming, remote desktops) ----

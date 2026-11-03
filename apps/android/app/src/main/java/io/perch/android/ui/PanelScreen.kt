@@ -41,6 +41,7 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Popup
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.window.PopupProperties
 import androidx.core.graphics.drawable.toBitmap
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -231,7 +232,17 @@ fun PanelScreen(ctx: Context, onMirror: () -> Unit) {
     // A separate, NON-focusable window: touching it does not move Android's focused display back
     // to the phone, so the virtual controller's kernel events keep flowing straight to the game's
     // display (no forwarding, no cancelled key-ups). Keyboard focus stays with the main window.
-    if (touchpad) Popup(properties = PopupProperties(focusable = false, dismissOnClickOutside = false, dismissOnBackPress = false)) {
+    // Touchpad mode: focusable, so the phone keeps being the IME target and the soft keyboard
+    // appears here while you type into a glasses app (as before). Gamepad modes: non-focusable.
+    if (touchpad) Popup(properties = PopupProperties(focusable = padMode == 0, dismissOnClickOutside = false, dismissOnBackPress = padMode == 0), onDismissRequest = { touchpad = false }) {
+        // A focusable pop-up window receives the hardware keys instead of the activity: forward them.
+        val view = LocalView.current
+        DisposableEffect(view) {
+            val root = view.rootView
+            val l = android.view.View.OnUnhandledKeyEventListener { _, e -> AppWindows.hardwareKey(e) }
+            root.addOnUnhandledKeyEventListener(l)
+            onDispose { root.removeOnUnhandledKeyEventListener(l) }
+        }
         Box(Modifier.fillMaxSize()) {
             TouchpadOverlay(ctx, padMode, { padMode = it }, onDismiss = { touchpad = false })
         }
@@ -277,7 +288,7 @@ private fun PresetPicture(name: String, ratios: List<Float>, onClick: () -> Unit
 private fun BrightnessRow(value: Float) {
     val hw by AppWindows.hardwareBrightness.collectAsStateWithLifecycle()
     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        Text(if (hw) "glasses" else "dim", style = MaterialTheme.typography.labelSmall)
+        Text("glasses", style = MaterialTheme.typography.labelSmall)
         Icon(Icons.Filled.BrightnessLow, "dim", Modifier.size(18.dp))
         Slider(value, { AppWindows.setBrightness(it) }, Modifier.weight(1f), valueRange = 0.15f..1f)
         Icon(Icons.Filled.BrightnessHigh, "bright", Modifier.size(18.dp))
@@ -439,15 +450,14 @@ private fun AppPicker(ctx: Context, onPick: (String, Boolean) -> Unit, onDismiss
 private fun BoxScope.TouchpadOverlay(ctx: Context, mode: Int, onMode: (Int) -> Unit, onDismiss: () -> Unit) {
     val focused by AppWindows.focused.collectAsStateWithLifecycle()
     val windows by AppWindows.windows.collectAsStateWithLifecycle()
-    // Scrim: tap outside the pad to close.
-    Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.35f)).clickable(onClick = onDismiss))
-    val maxH = (LocalConfiguration.current.screenHeightDp * 0.94f).dp
+    // Fills the screen from just under the status bar; the keyboard, when shown, pushes the
+    // content up (imePadding) like the old in-window overlay did.
     Surface(
-        Modifier.align(Alignment.BottomCenter).fillMaxWidth().heightIn(max = maxH),
+        Modifier.fillMaxSize().statusBarsPadding(),
         shape = RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp), tonalElevation = 3.dp, shadowElevation = 8.dp,
     ) {
-        // The pad/skin stays fixed; only the control section below scrolls on small phones.
-        Column(Modifier.fillMaxWidth().padding(horizontal = 12.dp).padding(top = 4.dp, bottom = 12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        // The pad/skin stays fixed; the control section takes the rest and scrolls when needed.
+        Column(Modifier.fillMaxSize().imePadding().navigationBarsPadding().padding(horizontal = 12.dp).padding(top = 4.dp, bottom = 6.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
             val mouse by AppWindows.mouseMode.collectAsStateWithLifecycle()
             // One row: input surface chips (+ Touch/Mouse for the pad), close at the end.
             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -511,7 +521,7 @@ private fun BoxScope.TouchpadOverlay(ctx: Context, mode: Int, onMode: (Int) -> U
             BrightnessRow(b)
             // Controls wrap on the left; the d-pad keeps its place on the right at any width.
             val fid = focused
-            Row(Modifier.fillMaxWidth().weight(1f, fill = false).verticalScroll(rememberScrollState()), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Row(Modifier.fillMaxWidth().weight(1f).verticalScroll(rememberScrollState()), verticalAlignment = Alignment.Top, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             FlowRow(Modifier.weight(1f), horizontalArrangement = Arrangement.SpaceEvenly, verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 Small(Icons.AutoMirrored.Filled.ArrowBack, "back") { AppWindows.key(KeyEvent.KEYCODE_BACK) }
                 Small(Icons.Filled.SkipNext, "next window") { AppWindows.focusNext(1) }
