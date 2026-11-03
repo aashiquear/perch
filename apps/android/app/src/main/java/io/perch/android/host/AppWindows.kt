@@ -132,6 +132,8 @@ object AppWindows {
 
     fun releaseAll() {
         windows.value.map { it.id }.forEach { remove(it) }
+        // Undo anything Perch set on the phone's own display.
+        runCatching { ShellBridge.shell.value?.resetOrientation(-1) }
     }
 
     /** Linux bar equivalents: nearer/further step 0.25 m, bigger/smaller ×1.15. */
@@ -254,6 +256,62 @@ object AppWindows {
         if (secure != win.secure) windows.value = windows.value.map { if (it.id == id) it.copy(secure = secure) else it }
         if (secure) lastError.value = "${win.label} blocks screen projection (FLAG_SECURE) and shows black on the glasses"
     }
+
+    // ---- glasses dimming -----------------------------------------------------
+    val brightness: MutableStateFlow<Float> = MutableStateFlow(1f)
+    fun setBrightness(b: Float) { brightness.value = b; GlassesService.presentation?.setBrightness(b) }
+
+    // ---- virtual gamepad ------------------------------------------------------
+    private var gamepadId = -1
+    val gamepadError: MutableStateFlow<String?> = MutableStateFlow(null)
+    /** Axis state: X Y Z RZ in -1..1, BRAKE GAS 0..1, HAT_X HAT_Y in -1/0/1. */
+    val axes = FloatArray(8)
+    private var lastAxesSend = 0L
+
+    private fun gamepadDevice(): Int {
+        if (gamepadId < 0) {
+            val shell = ShellBridge.shell.value ?: return -1
+            gamepadId = runCatching { shell.gamepadDeviceId() }.getOrDefault(-1)
+            if (gamepadId < 0) gamepadError.value = runCatching { shell.lastError() }.getOrNull() ?: "no gamepad device"
+        }
+        return gamepadId
+    }
+
+    /** Send the current axes as one joystick move (rate-limited to ~120 Hz). */
+    fun gamepadAxes(force: Boolean = false) {
+        val w = focusedWin() ?: return
+        val shell = ShellBridge.shell.value ?: return
+        val now = SystemClock.uptimeMillis()
+        if (!force && now - lastAxesSend < 8) return
+        lastAxesSend = now
+        val dev = gamepadDevice()
+        val props = arrayOf(MotionEvent.PointerProperties().apply { id = 0; toolType = MotionEvent.TOOL_TYPE_UNKNOWN })
+        val coords = arrayOf(MotionEvent.PointerCoords().apply {
+            setAxisValue(MotionEvent.AXIS_X, axes[0]); setAxisValue(MotionEvent.AXIS_Y, axes[1])
+            setAxisValue(MotionEvent.AXIS_Z, axes[2]); setAxisValue(MotionEvent.AXIS_RZ, axes[3])
+            setAxisValue(MotionEvent.AXIS_BRAKE, axes[4]); setAxisValue(MotionEvent.AXIS_GAS, axes[5])
+            setAxisValue(MotionEvent.AXIS_LTRIGGER, axes[4]); setAxisValue(MotionEvent.AXIS_RTRIGGER, axes[5])
+            setAxisValue(MotionEvent.AXIS_HAT_X, axes[6]); setAxisValue(MotionEvent.AXIS_HAT_Y, axes[7])
+        })
+        val src = InputDevice.SOURCE_JOYSTICK or InputDevice.SOURCE_GAMEPAD
+        val ev = MotionEvent.obtain(now, now, MotionEvent.ACTION_MOVE, 1, props, coords, 0, 0, 1f, 1f, dev, 0, src, 0)
+        runCatching { shell.injectMotion(w.displayId, ev) }
+        ev.recycle()
+    }
+
+    /** Gamepad button (KEYCODE_BUTTON_* or DPAD) press/release to the focused window. */
+    fun gamepadButton(keyCode: Int, down: Boolean) {
+        val w = focusedWin() ?: return
+        val shell = ShellBridge.shell.value ?: return
+        val now = SystemClock.uptimeMillis()
+        val dev = gamepadDevice()
+        val ev = android.view.KeyEvent(now, now, if (down) android.view.KeyEvent.ACTION_DOWN else android.view.KeyEvent.ACTION_UP,
+            keyCode, 0, 0, dev, 0, 0, InputDevice.SOURCE_GAMEPAD)
+        runCatching { shell.injectKeyEvent(w.displayId, ev) }
+    }
+
+    /** Arrow keys (suggestion strips, menus) to the focused window. */
+    fun arrow(keyCode: Int) = key(keyCode)
 
     /** Back key etc. to the focused app. */
     fun key(keyCode: Int) {

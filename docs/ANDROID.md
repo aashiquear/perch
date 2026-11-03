@@ -142,3 +142,13 @@ Shizuku user-service docs.
 - A Bluetooth mouse uses pointer capture on the panel (`requestPointerCapture`):
   the phone's pointer disappears and relative motion drives the glasses
   cursor, so clicks never land on the panel. The panel switch releases it.
+- Virtual gamepad: a UHID device ("Perch Gamepad", Xbox-like descriptor) is
+  created from the shell helper only so `InputDevice.getDevice(id)` reports a
+  real controller; joystick/button events are injected per display with that
+  device id (SOURCE_JOYSTICK|GAMEPAD, AXIS_X/Y/Z/RZ, BRAKE/GAS, HAT). Three
+  skins (Xbox, racing wheel, flight stick) map onto the same axes.
+- Glasses "brightness" is software dimming in the renderer (colour × factor);
+  the Rokid driver exposes no hardware brightness, the temple rocker does.
+- `wm set-ignore-orientation-request` is reset on each display before it is
+  released, and on the phone display when all windows go back, if it was off
+  before Perch started.

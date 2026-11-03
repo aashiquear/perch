@@ -7,7 +7,11 @@ import android.os.SystemClock
 import android.view.KeyEvent
 import android.view.MotionEvent
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
@@ -66,6 +70,8 @@ fun PanelScreen(ctx: Context, onMirror: () -> Unit) {
     val displayNames by GlassesService.displayNames.collectAsStateWithLifecycle()
     var picker by remember { mutableStateOf(false) }
     var touchpad by remember { mutableStateOf(false) }
+    var gamepad by remember { mutableStateOf(false) }
+    val bright by AppWindows.brightness.collectAsStateWithLifecycle()
     var arrange by remember { mutableStateOf(false) }
 
     LaunchedEffect(Unit) { ShellBridge.refresh() }
@@ -124,7 +130,12 @@ fun PanelScreen(ctx: Context, onMirror: () -> Unit) {
         }
         item {
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Action(Modifier.weight(1f), Icons.Filled.SportsEsports, "Gamepad", "Xbox · wheel · flight stick", selected = gamepad) { gamepad = true }
                 Action(Modifier.weight(1f), Icons.Filled.CenterFocusStrong, "Recenter", "temple button") { GlassesService.recenter() }
+            }
+        }
+        item {
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Action(Modifier.weight(1f), Icons.Filled.Tune, "Calibrate", "20 s, glasses still") { GlassesService.calibrate(20f) }
             }
         }
@@ -135,23 +146,25 @@ fun PanelScreen(ctx: Context, onMirror: () -> Unit) {
             }
         }
         if (arrange) item {
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                for ((name, portraitFirst) in listOf("1 × 1" to true, "2 side by side" to true, "wide centre" to false)) {
-                    OutlinedButton({ applyPreset(name) }) { Text(name) }
-                }
+            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                PresetPicture("1 × 1", listOf(0.46f)) { applyPreset("1 × 1") }
+                PresetPicture("2 side by side", listOf(0.46f, 0.46f)) { applyPreset("2 side by side") }
+                PresetPicture("wide centre", listOf(0.46f, 1.0f, 0.46f)) { applyPreset("wide centre") }
             }
         }
         item {
-            FlowRow(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            // The entry point: larger, coloured, so it reads as "begin here".
+            FlowRow(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 if (GlassesService.tracker == 0L) {
-                    Button({ GlassesService.start(ctx) }) { Text("Start") }
-                    OutlinedButton({ GlassesService.start(ctx, useMock = true) }) { Text("Start (mock)") }
+                    Big(Icons.Filled.PlayArrow, "Start", "glasses on USB", Color(0xFF2E7D32), Color.White) { GlassesService.start(ctx) }
+                    Big(Icons.Filled.Science, "Mock", "no glasses", Color(0xFF455A64), Color.White) { GlassesService.start(ctx, useMock = true) }
                 } else {
-                    OutlinedButton({ GlassesService.stop(ctx) }) { Text("Stop") }
+                    Big(Icons.Filled.Stop, "Stop", "release everything", Color(0xFFC62828), Color.White) { GlassesService.stop(ctx) }
                 }
-                OutlinedButton(onMirror) { Text("Mirror phone screen") }
+                Big(Icons.Filled.ScreenShare, "Mirror", "phone screen as a window", Color(0xFF1565C0), Color.White, onMirror)
             }
         }
+        item { BrightnessRow(bright) }
         item {
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                 Switch(routeHw, { AppWindows.routeHardware.value = it })
@@ -208,8 +221,69 @@ fun PanelScreen(ctx: Context, onMirror: () -> Unit) {
     }
 
     if (touchpad) TouchpadOverlay(onDismiss = { touchpad = false })
+    if (gamepad) GamepadOverlay(onDismiss = { gamepad = false })
     }
     if (picker) AppPicker(ctx, onPick = { pkg, portrait -> AppWindows.add(ctx, pkg, portrait); picker = false }, onDismiss = { picker = false })
+}
+
+/** Large coloured entry-point button with caption and hint under it. */
+@Composable
+private fun Big(icon: ImageVector, label: String, hint: String, bg: Color, fg: Color, onClick: () -> Unit) {
+    Column(Modifier.width(84.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+        FilledIconButton(onClick, Modifier.size(72.dp), shape = RoundedCornerShape(18.dp),
+            colors = IconButtonDefaults.filledIconButtonColors(containerColor = bg, contentColor = fg)) {
+            Icon(icon, label, Modifier.size(40.dp))
+        }
+        Text(label, style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.SemiBold)
+        Text(hint, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1)
+    }
+}
+
+/** A preset as a picture: boxes with the given width/height ratios (portrait ≈ 0.46, landscape 1.0..). */
+@Composable
+private fun PresetPicture(name: String, ratios: List<Float>, onClick: () -> Unit) {
+    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+        Box(Modifier.size(width = 84.dp, height = 48.dp).clip(RoundedCornerShape(10.dp)).background(MaterialTheme.colorScheme.surfaceVariant).clickable(onClick = onClick)) {
+            Canvas(Modifier.fillMaxSize().padding(6.dp)) {
+                val h = size.height
+                val total = ratios.sumOf { (it * h).toDouble() }.toFloat() + 4f * (ratios.size - 1)
+                var x = (size.width - total) / 2f
+                for (r in ratios) {
+                    val w = r * h
+                    drawRoundRect(Color(0xFF7FA7D9), topLeft = androidx.compose.ui.geometry.Offset(x, 0f), size = androidx.compose.ui.geometry.Size(w, h), cornerRadius = androidx.compose.ui.geometry.CornerRadius(3f, 3f))
+                    x += w + 4f
+                }
+            }
+        }
+        Text(name, style = MaterialTheme.typography.labelSmall)
+    }
+}
+
+/** Software dimming of the glasses image; hardware brightness is the temple rocker. */
+@Composable
+private fun BrightnessRow(value: Float) {
+    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        Icon(Icons.Filled.BrightnessLow, "dim", Modifier.size(18.dp))
+        Slider(value, { AppWindows.setBrightness(it) }, Modifier.weight(1f), valueRange = 0.15f..1f)
+        Icon(Icons.Filled.BrightnessHigh, "bright", Modifier.size(18.dp))
+        Text("${(value * 100).toInt()}%", style = MaterialTheme.typography.labelSmall, modifier = Modifier.width(36.dp))
+    }
+}
+
+/** Round four-way pad sending DPAD key codes. */
+@Composable
+private fun DPad(modifier: Modifier, onKey: (Int) -> Unit) {
+    Box(modifier.clip(androidx.compose.foundation.shape.CircleShape).background(MaterialTheme.colorScheme.surfaceVariant)) {
+        @Composable
+        fun Arm(align: Alignment, icon: ImageVector, code: Int, label: String) {
+            IconButton({ onKey(code) }, Modifier.align(align).size(36.dp)) { Icon(icon, label) }
+        }
+        Arm(Alignment.TopCenter, Icons.Filled.KeyboardArrowUp, KeyEvent.KEYCODE_DPAD_UP, "up")
+        Arm(Alignment.BottomCenter, Icons.Filled.KeyboardArrowDown, KeyEvent.KEYCODE_DPAD_DOWN, "down")
+        Arm(Alignment.CenterStart, Icons.Filled.KeyboardArrowLeft, KeyEvent.KEYCODE_DPAD_LEFT, "left")
+        Arm(Alignment.CenterEnd, Icons.Filled.KeyboardArrowRight, KeyEvent.KEYCODE_DPAD_RIGHT, "right")
+        IconButton({ onKey(KeyEvent.KEYCODE_DPAD_CENTER) }, Modifier.align(Alignment.Center).size(30.dp)) { Icon(Icons.Filled.RadioButtonChecked, "enter", Modifier.size(16.dp)) }
+    }
 }
 
 /** Compact icon button with a one-word caption under it. */
@@ -366,19 +440,39 @@ private fun BoxScope.TouchpadOverlay(onDismiss: () -> Unit) {
                 IconButton(onDismiss) { Icon(Icons.Filled.Close, "close touchpad") }
             }
             val gestures = remember { PhoneTouchpad() }
-            // Pad height follows the screen: ~38 % of it, so the bar below stays reachable.
-            val padH = (LocalConfiguration.current.screenHeightDp * 0.38f).dp.coerceIn(200.dp, 380.dp)
-            Box(
-                Modifier.fillMaxWidth().height(padH).clip(RoundedCornerShape(16.dp))
-                    .background(MaterialTheme.colorScheme.surfaceVariant)
-                    .pointerInteropFilter { gestures.onTouch(it) },
-                contentAlignment = Alignment.Center,
-            ) {
-                Text(
-                    "1 finger: move · tap · double-tap+hold: drag\n2 fingers: scroll · 3-finger swipe: next window",
-                    style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
+            var dragLock by remember { mutableStateOf(false) }
+            gestures.dragLock = dragLock
+            // Pad height follows the screen: ~34 % of it, so the bars below stay reachable.
+            val padH = (LocalConfiguration.current.screenHeightDp * 0.34f).dp.coerceIn(180.dp, 360.dp)
+            val edge = with(LocalDensity.current) { 22.dp.toPx() }
+            gestures.edgePx = edge
+            Row(Modifier.fillMaxWidth().height(padH), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Box(
+                    Modifier.weight(1f).fillMaxHeight().clip(RoundedCornerShape(16.dp))
+                        .background(MaterialTheme.colorScheme.surfaceVariant)
+                        // Thin rim: a stroke that starts here is a drag (press held while you slide).
+                        .border(22.dp, if (dragLock) Color(0x553F51B5) else Color(0x332196F3), RoundedCornerShape(16.dp))
+                        .onSizeChanged { gestures.padW = it.width.toFloat(); gestures.padH = it.height.toFloat() }
+                        .pointerInteropFilter { gestures.onTouch(it) },
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Text(
+                        if (dragLock) "DRAG MODE: slide = drag with the button held\ntap the lock to go back" else
+                        "1 finger: move · tap · double-tap+hold: drag\nstart on the rim: drag · 2 fingers: scroll · 3-finger swipe: next window",
+                        style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                    )
+                    // Lock in the corner toggles drag mode for every stroke.
+                    FilledTonalIconButton({ dragLock = !dragLock }, Modifier.align(Alignment.TopEnd).padding(6.dp).size(36.dp),
+                        colors = if (dragLock) IconButtonDefaults.filledTonalIconButtonColors(containerColor = MaterialTheme.colorScheme.primary, contentColor = MaterialTheme.colorScheme.onPrimary) else IconButtonDefaults.filledTonalIconButtonColors()) {
+                        Icon(if (dragLock) Icons.Filled.Lock else Icons.Filled.LockOpen, "drag lock", Modifier.size(18.dp))
+                    }
+                }
+                // Arrow keys for suggestion strips / menus that need a keyboard cursor.
+                DPad(Modifier.size(112.dp)) { AppWindows.arrow(it) }
             }
+            val b by AppWindows.brightness.collectAsStateWithLifecycle()
+            BrightnessRow(b)
             // Icon row. No Home/Recents: those act on the phone's own display, not the glasses.
             val fid = focused
             FlowRow(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly, verticalArrangement = Arrangement.spacedBy(6.dp), maxItemsInEachRow = 5) {
@@ -397,17 +491,26 @@ private fun BoxScope.TouchpadOverlay(onDismiss: () -> Unit) {
 }
 
 private class PhoneTouchpad {
+    /** Every stroke is a drag (corner lock). */
+    @Volatile var dragLock = false
+    /** Strokes starting within this many px of the pad edge are drags. */
+    @Volatile var edgePx = 0f
     private var lastX = 0f; private var lastY = 0f
     private var downT = 0L; private var lastTapT = 0L
     private var maxFingers = 0; private var moved = false; private var dragging = false
     private var scrollAcc = 0f; private var scrollAccX = 0f; private var threeStartX = 0f
     private val gain = 2.2f
 
+    /** Pad size in px, from onSizeChanged. */
+    @Volatile var padW = 0f
+    @Volatile var padH = 0f
+
     fun onTouch(e: MotionEvent): Boolean {
         when (e.actionMasked) {
             MotionEvent.ACTION_DOWN -> {
                 lastX = e.x; lastY = e.y; downT = SystemClock.uptimeMillis(); maxFingers = 1; moved = false; scrollAcc = 0f; scrollAccX = 0f
-                if (downT - lastTapT < 250) { dragging = true; AppWindows.pressDown() }
+                val onRim = edgePx > 0f && (e.x < edgePx || e.y < edgePx || e.x > padW - edgePx || e.y > padH - edgePx)
+                if (dragLock || onRim || downT - lastTapT < 250) { dragging = true; AppWindows.pressDown() }
             }
             MotionEvent.ACTION_POINTER_DOWN -> {
                 maxFingers = maxOf(maxFingers, e.pointerCount)

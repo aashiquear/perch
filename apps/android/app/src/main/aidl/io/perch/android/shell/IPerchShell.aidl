@@ -30,6 +30,10 @@ interface IPerchShell {
     String closeApp(int displayId, String pkg) = 10;
     /** True if a window on the display has FLAG_SECURE (shows black on virtual displays). */
     boolean isSecure(int displayId) = 11;
+    /** Create (once) a virtual HID gamepad so games see a real controller; returns its InputDevice id or -1. */
+    int gamepadDeviceId() = 12;
+    /** Undo the per-display orientation setting Perch applied; `displayId` -1 = the phone screen (only if Perch changed it). */
+    void resetOrientation(int displayId) = 13;
     /** Shizuku convention: tear the service down. */
     void destroy() = 16777114;
 }

@@ -46,6 +46,8 @@ class PerchShellService(private val context: Context) : IPerchShell.Stub() {
 
     private val displays = HashMap<Int, VirtualDisplay>()
     @Volatile private var lastError = ""
+    /** What `wm get-ignore-orientation-request` said for the phone screen before Perch touched anything. */
+    private var phoneIgnoredOrientation: Boolean? = null
 
     /**
      * System services check that the package name matches the calling uid.
@@ -93,6 +95,9 @@ class PerchShellService(private val context: Context) : IPerchShell.Stub() {
             Log.i(TAG, "display $id: $name ${width}x$height@$dpi flags=0x${flags.toString(16)}")
             // Portrait-locked apps (Instagram…) on a landscape display get letterboxed
             // instead of the whole display rotating with them. Same as DeX.
+            if (phoneIgnoredOrientation == null) {
+                phoneIgnoredOrientation = sh("wm", "get-ignore-orientation-request", "-d", "0").contains("true")
+            }
             sh("wm", "set-ignore-orientation-request", "true", "-d", id.toString())
             id
         } catch (e: Throwable) {
@@ -112,7 +117,35 @@ class PerchShellService(private val context: Context) : IPerchShell.Stub() {
     }
 
     override fun releaseDisplay(displayId: Int) {
+        resetOrientation(displayId)
         displays.remove(displayId)?.release()
+    }
+
+    override fun resetOrientation(displayId: Int) {
+        if (displayId >= 0) {
+            // The setting is persisted per display unique id; clear it before the display goes.
+            sh("wm", "set-ignore-orientation-request", "false", "-d", displayId.toString())
+        } else if (phoneIgnoredOrientation == false) {
+            sh("wm", "set-ignore-orientation-request", "false", "-d", "0")
+        }
+    }
+
+    override fun gamepadDeviceId(): Int {
+        UhidGamepad.create()?.let { lastError = it; return -1 }
+        val im = inputManager ?: return -1
+        // The device shows up asynchronously; poll briefly.
+        repeat(20) {
+            try {
+                val ids = HiddenApiBypass.invoke(im.javaClass, im, "getInputDeviceIds") as IntArray
+                for (id in ids) {
+                    val dev = HiddenApiBypass.invoke(im.javaClass, im, "getInputDevice", id) as? android.view.InputDevice
+                    if (dev?.name == UhidGamepad.NAME) return id
+                }
+            } catch (e: Throwable) { lastError = "gamepad lookup: $e"; return -1 }
+            Thread.sleep(50)
+        }
+        lastError = "gamepad device did not appear"
+        return -1
     }
 
     private fun sh(vararg cmd: String): String = try {
@@ -222,6 +255,8 @@ class PerchShellService(private val context: Context) : IPerchShell.Stub() {
     }
 
     override fun destroy() {
+        UhidGamepad.destroy()
+        resetOrientation(-1)
         displays.values.forEach { runCatching { it.release() } }
         displays.clear()
         Log.i(TAG, "destroyed")

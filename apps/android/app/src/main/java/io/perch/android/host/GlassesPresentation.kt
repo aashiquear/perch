@@ -51,6 +51,8 @@ class GlassesPresentation(ctx: Context, display: Display) : Presentation(ctx, di
 
     /** Cursor: which window and where in it (0..1), or null to hide. */
     fun setCursor(index: Int?, u: Float, v: Float) = renderer.setCursor(index, u, v)
+    /** 0.15..1: multiplies the output colour; black background stays black. */
+    fun setBrightness(b: Float) { renderer.brightness = b.coerceIn(0.15f, 1f) }
     fun pinHere(index: Int) = glView.queueEvent { renderer.pinHere(index) }
     fun nudgeWindow(index: Int, dDistance: Float, scale: Float) = glView.queueEvent { renderer.nudge(index, dDistance, scale) }
 
@@ -83,6 +85,8 @@ class SpatialRenderer(private val panelW: Int, private val panelH: Int) : GLSurf
     private var sPos = 0
     private var sColor = 0
     @Volatile private var cursorIndex: Int? = null
+    /** Software dimming of everything drawn (the Rokid driver exposes no hardware brightness). */
+    @Volatile var brightness = 1f
     @Volatile private var cursorU = 0.5f
     @Volatile private var cursorV = 0.5f
     private var aPos = 0
@@ -195,7 +199,7 @@ class SpatialRenderer(private val panelW: Int, private val panelH: Int) : GLSurf
             GLES20.glActiveTexture(GLES20.GL_TEXTURE0)
             GLES20.glBindTexture(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, layer.texId)
             GLES20.glUniform1i(uTex, 0)
-            GLES20.glUniform1f(uOpacity, 1f)
+            GLES20.glUniform1f(uOpacity, brightness)
             verts.position(0)
             GLES20.glVertexAttribPointer(aPos, 3, GLES20.GL_FLOAT, false, 20, verts)
             GLES20.glEnableVertexAttribArray(aPos)
@@ -281,7 +285,7 @@ class SpatialRenderer(private val panelW: Int, private val panelH: Int) : GLSurf
             varying vec2 vUv;
             void main() {
                 vec4 c = texture2D(uTex, vUv);
-                gl_FragColor = vec4(c.rgb, c.a * uOpacity);
+                gl_FragColor = vec4(c.rgb * uOpacity, c.a);
             }
         """.trimIndent()
         fun compile(type: Int, src: String): Int {
