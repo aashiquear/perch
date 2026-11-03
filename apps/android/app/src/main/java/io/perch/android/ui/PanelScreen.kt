@@ -54,6 +54,8 @@ import androidx.core.graphics.drawable.toBitmap
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import io.perch.android.R
 import io.perch.android.host.AppWindows
+import io.perch.android.host.InputTarget
+import io.perch.android.host.LocalInputTarget
 import io.perch.android.host.GlassesService
 import io.perch.android.host.MirrorSource
 import io.perch.android.shell.ShellBridge
@@ -326,6 +328,7 @@ private fun DPad(modifier: Modifier, onKey: (Int) -> Unit) {
  */
 @Composable
 private fun TypeBar(onClose: () -> Unit) {
+    val target = LocalInputTarget.current
     var text by remember { mutableStateOf("") }
     val fr = remember { FocusRequester() }
     LaunchedEffect(Unit) { runCatching { fr.requestFocus() } }
@@ -333,8 +336,8 @@ private fun TypeBar(onClose: () -> Unit) {
         OutlinedTextField(
             text,
             { new ->
-                if (new.length > text.length && new.startsWith(text)) AppWindows.typeText(new.substring(text.length))
-                else if (new.length < text.length && text.startsWith(new)) repeat(text.length - new.length) { AppWindows.key(KeyEvent.KEYCODE_DEL) }
+                if (new.length > text.length && new.startsWith(text)) target.typeText(new.substring(text.length))
+                else if (new.length < text.length && text.startsWith(new)) repeat(text.length - new.length) { target.key(KeyEvent.KEYCODE_DEL) }
                 else { // mid-string edit: resend nothing, just keep the field in sync
                 }
                 text = if (new.length > 120) "" else new
@@ -342,9 +345,9 @@ private fun TypeBar(onClose: () -> Unit) {
             modifier = Modifier.weight(1f).focusRequester(fr), singleLine = true,
             placeholder = { Text("type here → focused window") },
             keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
-            keyboardActions = KeyboardActions(onSend = { AppWindows.key(KeyEvent.KEYCODE_ENTER); text = "" }),
+            keyboardActions = KeyboardActions(onSend = { target.key(KeyEvent.KEYCODE_ENTER); text = "" }),
         )
-        FilledTonalIconButton({ AppWindows.key(KeyEvent.KEYCODE_ENTER); text = "" }, Modifier.size(40.dp)) { Icon(Icons.AutoMirrored.Filled.KeyboardReturn, "enter") }
+        FilledTonalIconButton({ target.key(KeyEvent.KEYCODE_ENTER); text = "" }, Modifier.size(40.dp)) { Icon(Icons.AutoMirrored.Filled.KeyboardReturn, "enter") }
         IconButton(onClose, Modifier.size(36.dp)) { Icon(Icons.Filled.Close, "close keyboard") }
     }
 }
@@ -519,7 +522,9 @@ private fun AppPicker(ctx: Context, onPick: (String, Boolean) -> Unit, onDismiss
  */
 @OptIn(ExperimentalComposeUiApi::class, ExperimentalLayoutApi::class)
 @Composable
-private fun BoxScope.TouchpadOverlay(ctx: Context, mode: Int, onMode: (Int) -> Unit, onDismiss: () -> Unit) {
+internal fun BoxScope.TouchpadOverlay(ctx: Context, mode: Int, onMode: (Int) -> Unit, onDismiss: () -> Unit, remoteChips: (@Composable RowScope.() -> Unit)? = null) {
+    val target = LocalInputTarget.current
+    val local = target.isLocal
     val focused by AppWindows.focused.collectAsStateWithLifecycle()
     val windows by AppWindows.windows.collectAsStateWithLifecycle()
     // Fills the screen from just under the status bar; the keyboard, when shown, pushes the
@@ -530,34 +535,36 @@ private fun BoxScope.TouchpadOverlay(ctx: Context, mode: Int, onMode: (Int) -> U
     ) {
         // The pad/skin stays fixed; the control section takes the rest and scrolls when needed.
         Column(Modifier.fillMaxSize().imePadding().navigationBarsPadding().padding(horizontal = 12.dp).padding(top = 4.dp, bottom = 6.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-            val mouse by AppWindows.mouseMode.collectAsStateWithLifecycle()
+            val mouse by target.mouseMode.collectAsStateWithLifecycle()
             // One row: input surface chips (+ Touch/Mouse for the pad), close at the end.
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Row(Modifier.weight(1f).horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(4.dp), verticalAlignment = Alignment.CenterVertically) {
                     listOf("Touchpad", "Xbox", "Wheel", "Flight").forEachIndexed { i, n ->
                         FilterChip(selected = mode == i, onClick = { onMode(i) }, label = { Text(n) })
                     }
-                    if (mode == 0) {
+                    if (mode == 0 && local) {
                         Spacer(Modifier.width(6.dp))
-                        FilterChip(selected = !mouse, onClick = { AppWindows.mouseMode.value = false }, label = { Text("Touch") })
-                        FilterChip(selected = mouse, onClick = { AppWindows.mouseMode.value = true }, label = { Text("Mouse") })
+                        FilterChip(selected = !mouse, onClick = { target.mouseMode.value = false }, label = { Text("Touch") })
+                        FilterChip(selected = mouse, onClick = { target.mouseMode.value = true }, label = { Text("Mouse") })
                     }
                 }
                 IconButton(onDismiss, Modifier.size(36.dp)) { Icon(Icons.Filled.Close, "close touchpad") }
             }
-            if (windows.size > 1) Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+            if (remoteChips != null) Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(4.dp)) { remoteChips() }
+            else if (windows.size > 1) Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                 windows.forEach { w ->
                     FilterChip(selected = focused == w.id, onClick = { AppWindows.focus(w.id) }, label = { Text(w.label) })
                 }
             }
-            LaunchedEffect(mode) { if (mode != 0) AppWindows.gamepadAnnounce() }
+            LaunchedEffect(mode) { if (mode != 0) target.gamepadAnnounce() }
             val gpErr by AppWindows.gamepadError.collectAsStateWithLifecycle()
             val gpInfo by AppWindows.gamepadInfo.collectAsStateWithLifecycle()
-            if (mode != 0) {
+            if (mode != 0 && local) {
                 gpErr?.let { Text("Controller identity unavailable ($it); games that insist on a real gamepad may ignore input.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error) }
                 Text(gpInfo, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
             val gestures = remember { PhoneTouchpad() }
+            gestures.target = target
             var dragLock by remember { mutableStateOf(false) }
             var typing by remember { mutableStateOf(false) }
             var scrollLock by remember { mutableStateOf(false) }
@@ -570,7 +577,7 @@ private fun BoxScope.TouchpadOverlay(ctx: Context, mode: Int, onMode: (Int) -> U
                     if (vx != 0f || vy != 0f) {
                         // Quadratic response: fine control near the middle, fast at the ends (≈ 25 lines/s max).
                         fun curve(v: Float) = v * abs(v) * 0.8f
-                        AppWindows.scroll(curve(vx), -curve(vy))
+                        target.scroll(curve(vx), -curve(vy))
                     }
                     kotlinx.coroutines.delay(32)
                 }
@@ -618,25 +625,27 @@ private fun BoxScope.TouchpadOverlay(ctx: Context, mode: Int, onMode: (Int) -> U
                 }
             }
             val b by AppWindows.brightness.collectAsStateWithLifecycle()
-            BrightnessRow(b)
+            if (local) BrightnessRow(b)
             // Controls wrap on the left; the d-pad keeps its place on the right at any width.
             val fid = focused
             Row(Modifier.fillMaxWidth().weight(1f).verticalScroll(rememberScrollState()), verticalAlignment = Alignment.Top, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             FlowRow(Modifier.weight(1f), horizontalArrangement = Arrangement.SpaceEvenly, verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                Small(Icons.AutoMirrored.Filled.ArrowBack, "back") { AppWindows.key(KeyEvent.KEYCODE_BACK) }
-                Small(Icons.Filled.SkipNext, "next window") { AppWindows.focusNext(1) }
-                Small(Icons.Filled.PushPin, "pin here") { fid?.let { AppWindows.pinHere(it) } }
-                Small(Icons.Filled.ScreenRotation, "rotate") { fid?.let { AppWindows.flip(it) } }
-                Small(Icons.Filled.ZoomIn, "bigger") { fid?.let { AppWindows.bigger(it) } }
-                Small(Icons.Filled.ZoomOut, "smaller") { fid?.let { AppWindows.smaller(it) } }
-                Small(Icons.Filled.ArrowDownward, "nearer") { fid?.let { AppWindows.nearer(it) } }
-                Small(Icons.Filled.ArrowUpward, "further") { fid?.let { AppWindows.further(it) } }
-                Small(Icons.Filled.Refresh, "re-open app") { fid?.let { AppWindows.relaunch(it) } }
+                Small(Icons.AutoMirrored.Filled.ArrowBack, if (local) "back" else "esc") { target.key(KeyEvent.KEYCODE_BACK) }
+                Small(Icons.Filled.SkipNext, "next window") { target.focusNext(1) }
+                Small(Icons.Filled.PushPin, "pin here") { target.pinHere() }
+                if (target.supportsWindowOps) {
+                    Small(Icons.Filled.ScreenRotation, "rotate") { target.flip() }
+                    Small(Icons.Filled.ZoomIn, "bigger") { target.bigger() }
+                    Small(Icons.Filled.ZoomOut, "smaller") { target.smaller() }
+                    Small(Icons.Filled.ArrowDownward, "nearer") { target.nearer() }
+                    Small(Icons.Filled.ArrowUpward, "further") { target.further() }
+                    Small(Icons.Filled.Refresh, "re-open app") { target.relaunch() }
+                }
             }
             // Arrow keys for suggestion strips / menus that need a keyboard cursor; the keyboard
             // button below opens a typing field here, so the phone's keyboard always appears.
             Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                DPad(Modifier.size(112.dp)) { AppWindows.arrow(it, asGamepad = mode != 0) }
+                DPad(Modifier.size(112.dp)) { target.arrow(it, asGamepad = mode != 0) }
                 FilledTonalIconButton({ typing = !typing }, Modifier.size(40.dp),
                     colors = if (typing) IconButtonDefaults.filledTonalIconButtonColors(containerColor = MaterialTheme.colorScheme.primary, contentColor = MaterialTheme.colorScheme.onPrimary) else IconButtonDefaults.filledTonalIconButtonColors()) {
                     Icon(Icons.Filled.Keyboard, "keyboard", Modifier.size(22.dp))
@@ -649,6 +658,7 @@ private fun BoxScope.TouchpadOverlay(ctx: Context, mode: Int, onMode: (Int) -> U
 }
 
 private class PhoneTouchpad {
+    @Volatile var target: InputTarget = AppWindows
     /** Every stroke is a drag (corner lock). */
     @Volatile var dragLock = false
     /** Strokes starting within this many px of the pad edge are drags. */
@@ -668,7 +678,7 @@ private class PhoneTouchpad {
             MotionEvent.ACTION_DOWN -> {
                 lastX = e.x; lastY = e.y; downT = SystemClock.uptimeMillis(); maxFingers = 1; moved = false; scrollAcc = 0f; scrollAccX = 0f
                 val onRim = edgePx > 0f && (e.x < edgePx || e.y < edgePx || e.x > padW - edgePx || e.y > padH - edgePx)
-                if (dragLock || onRim || downT - lastTapT < 250) { dragging = true; AppWindows.pressDown() }
+                if (dragLock || onRim || downT - lastTapT < 250) { dragging = true; target.pressDown() }
             }
             MotionEvent.ACTION_POINTER_DOWN -> {
                 maxFingers = maxOf(maxFingers, e.pointerCount)
@@ -680,31 +690,31 @@ private class PhoneTouchpad {
                 lastX = e.getX(0); lastY = e.getY(0)
                 if (abs(dx) + abs(dy) > 2f) moved = true
                 when (e.pointerCount) {
-                    1 -> { val a = 1f + (abs(dx) + abs(dy)) / 40f; AppWindows.cursorMove(dx * gain * a, dy * gain * a) }
+                    1 -> { val a = 1f + (abs(dx) + abs(dy)) / 40f; target.cursorMove(dx * gain * a, dy * gain * a) }
                     2 -> {
-                        if (AppWindows.mouseMode.value) {
+                        if (target.mouseMode.value) {
                             scrollAcc += dy; scrollAccX += dx
-                            if (abs(scrollAcc) > 24f) { AppWindows.scroll(0f, if (scrollAcc > 0) 1f else -1f); scrollAcc = 0f }
-                            if (abs(scrollAccX) > 24f) { AppWindows.scroll(if (scrollAccX > 0) 1f else -1f, 0f); scrollAccX = 0f }
+                            if (abs(scrollAcc) > 24f) { target.scroll(0f, if (scrollAcc > 0) 1f else -1f); scrollAcc = 0f }
+                            if (abs(scrollAccX) > 24f) { target.scroll(if (scrollAccX > 0) 1f else -1f, 0f); scrollAccX = 0f }
                         } else {
                             // Content follows the fingers, as a finger drag at the cursor.
-                            AppWindows.scrollMove(dx * 1.5f, dy * 1.5f)
+                            target.scrollMove(dx * 1.5f, dy * 1.5f)
                         }
                     }
                 }
             }
-            MotionEvent.ACTION_POINTER_UP -> if (e.pointerCount == 2) AppWindows.scrollEnd()
+            MotionEvent.ACTION_POINTER_UP -> if (e.pointerCount == 2) target.scrollEnd()
             MotionEvent.ACTION_UP -> {
                 val now = SystemClock.uptimeMillis()
-                AppWindows.scrollEnd()
-                if (dragging) { dragging = false; AppWindows.pressUp() }
+                target.scrollEnd()
+                if (dragging) { dragging = false; target.pressUp() }
                 else if (!moved && now - downT < 220) {
                     when (maxFingers) {
-                        1 -> { AppWindows.tap(); lastTapT = now }
-                        2 -> AppWindows.key(KeyEvent.KEYCODE_BACK)
+                        1 -> { target.tap(); lastTapT = now }
+                        2 -> target.key(KeyEvent.KEYCODE_BACK)
                     }
                 } else if (maxFingers == 3 && abs(e.getX(0) - threeStartX) > 120f) {
-                    AppWindows.focusNext(if (e.getX(0) > threeStartX) 1 else -1)
+                    target.focusNext(if (e.getX(0) > threeStartX) 1 else -1)
                 }
             }
         }

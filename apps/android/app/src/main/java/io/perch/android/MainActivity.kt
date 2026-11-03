@@ -28,7 +28,9 @@ import io.perch.android.host.GlassesService
 import io.perch.android.host.MirrorSource
 import io.perch.android.ui.CrashLog
 import io.perch.android.touchpad.PerchClient
-import io.perch.android.touchpad.TouchpadSurface
+import io.perch.android.touchpad.RemoteTarget
+import io.perch.android.host.LocalInputTarget
+import io.perch.android.ui.TouchpadOverlay
 import io.perch.android.shell.ShellBridge
 import io.perch.android.ui.PanelScreen
 import io.perch.android.ui.PerchTheme
@@ -92,8 +94,12 @@ class MainActivity : ComponentActivity() {
 
     // Bluetooth keyboard / mouse / gamepad: while Perch is in front and a glasses
     // window is focused, send them there instead of to the panel.
+    /** Set while the Laptop remote is connected: hardware keys go to the laptop. */
+    @Volatile private var remoteTarget: RemoteTarget? = null
+
     override fun dispatchKeyEvent(event: android.view.KeyEvent): Boolean =
-        AppWindows.hardwareKey(event) || super.dispatchKeyEvent(event)
+        (remoteTarget?.takeIf { event.deviceId > 0 }?.hardwareKey(event) ?: false) ||
+            AppWindows.hardwareKey(event) || super.dispatchKeyEvent(event)
 
     override fun dispatchGenericMotionEvent(ev: android.view.MotionEvent): Boolean =
         AppWindows.hardwareMotion(ev) || super.dispatchGenericMotionEvent(ev)
@@ -139,31 +145,27 @@ class MainActivity : ComponentActivity() {
             }
             return
         }
-        Column(Modifier.fillMaxSize().padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween, modifier = Modifier.fillMaxWidth()) {
-                Text(hostName, style = MaterialTheme.typography.titleMedium)
-                TextButton({ client.disconnect() }) { Text("Disconnect") }
-            }
-            // Window chips: tap = focus, long-press = pin here.
-            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                windows.filter { it.visible }.forEach { w ->
-                    FilterChip(selected = w.focused, onClick = { client.focus(w.id) }, label = { Text(w.label) })
-                }
-            }
-            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                Button({ client.recenter() }) { Text("Recenter") }
-                OutlinedButton({ windows.firstOrNull { it.focused }?.let { client.pinHere(it.id) } }) { Text("Pin here") }
-                OutlinedButton({ client.focusNext() }) { Text("Next") }
-                var presets by remember { mutableStateOf(false) }
-                Box {
-                    OutlinedButton({ presets = true }) { Text("Layout") }
-                    DropdownMenu(presets, { presets = false }) {
-                        listOf("single", "coding", "gaming", "couch").forEach { p -> DropdownMenuItem({ Text(p) }, { client.preset(p); presets = false }) }
+        // Connected: the same pop-up as the glasses tab, pointed at the laptop.
+        val target = remember(client) { RemoteTarget(client) }
+        remoteTarget = target
+        var mode by rememberSaveable { mutableIntStateOf(0) }
+        DisposableEffect(Unit) { onDispose { remoteTarget = null } }
+        Box(Modifier.fillMaxSize()) {
+            CompositionLocalProvider(LocalInputTarget provides target) {
+                TouchpadOverlay(this@MainActivity, mode, { mode = it }, onDismiss = { client.disconnect() }, remoteChips = {
+                    Text(hostName, style = MaterialTheme.typography.labelLarge, modifier = Modifier.padding(end = 6.dp))
+                    windows.filter { it.visible }.forEach { w ->
+                        FilterChip(selected = w.focused, onClick = { client.focus(w.id) }, label = { Text(w.label) })
                     }
-                }
+                    var presets by remember { mutableStateOf(false) }
+                    Box {
+                        FilterChip(selected = presets, onClick = { presets = true }, label = { Text("Layout") })
+                        DropdownMenu(presets, { presets = false }) {
+                            listOf("single", "coding", "gaming", "couch").forEach { p -> DropdownMenuItem({ Text(p) }, { client.preset(p); presets = false }) }
+                        }
+                    }
+                })
             }
-            TouchpadSurface(client, Modifier.weight(1f))
-            RemoteKeyboardBar(client)
         }
     }
 }

@@ -18,7 +18,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
  * Also owns the cursor: a position inside the focused window that the
  * pop-up touchpad moves and that taps/scrolls are injected at.
  */
-object AppWindows {
+object AppWindows : InputTarget {
     private const val TAG = "AppWindows"
 
     /** Portrait display size (phone-like) and its landscape counterpart. */
@@ -114,7 +114,7 @@ object AppWindows {
         GlassesService.presentation?.setCursor(windows.value.firstOrNull { it.id == id }?.layer, cursorU, cursorV)
     }
 
-    fun focusNext(step: Int) {
+    override fun focusNext(step: Int) {
         val list = windows.value
         if (list.isEmpty()) return
         val i = list.indexOfFirst { it.id == focused.value }
@@ -169,6 +169,15 @@ object AppWindows {
         if (err.isNotEmpty()) lastError.value = "relaunch: $err"
     }
 
+    override val supportsWindowOps: Boolean get() = true
+    override fun pinHere() { focused.value?.let { pinHere(it) } }
+    override fun flip() { focused.value?.let { flip(it) } }
+    override fun bigger() { focused.value?.let { bigger(it) } }
+    override fun smaller() { focused.value?.let { smaller(it) } }
+    override fun nearer() { focused.value?.let { nearer(it) } }
+    override fun further() { focused.value?.let { further(it) } }
+    override fun relaunch() { focused.value?.let { relaunch(it) } }
+
     fun pinHere(id: Int) {
         windows.value.firstOrNull { it.id == id }?.let { GlassesService.presentation?.pinHere(it.layer) }
     }
@@ -178,7 +187,7 @@ object AppWindows {
     private fun focusedWin(): Win? = windows.value.firstOrNull { it.id == focused.value }
 
     /** Move the cursor by trackpad pixels (already accelerated by the gesture layer). */
-    fun cursorMove(dx: Float, dy: Float) {
+    override fun cursorMove(dx: Float, dy: Float) {
         val w = focusedWin() ?: return
         cursorU = (cursorU + dx / w.width).coerceIn(0f, 1f)
         cursorV = (cursorV + dy / w.height).coerceIn(0f, 1f)
@@ -206,9 +215,9 @@ object AppWindows {
     }
 
     /** Tap = touch down/up at the cursor (or a mouse click in mouse mode). */
-    fun tap() { pressDown(); pressUp() }
+    override fun tap() { pressDown(); pressUp() }
 
-    fun pressDown() {
+    override fun pressDown() {
         if (mouseMode.value) {
             mouseButtonDown = true
             injectMouse(mouseEvent(MotionEvent.ACTION_DOWN, MotionEvent.BUTTON_PRIMARY))
@@ -217,7 +226,7 @@ object AppWindows {
         }
         dragging = true; touch(MotionEvent.ACTION_DOWN)
     }
-    fun pressUp() {
+    override fun pressUp() {
         if (mouseButtonDown) {
             mouseButtonDown = false
             injectMouse(mouseEvent(MotionEvent.ACTION_BUTTON_RELEASE, 0))
@@ -237,14 +246,14 @@ object AppWindows {
         touchAt(MotionEvent.ACTION_DOWN, scrollU, scrollV, w)
     }
     /** dx, dy in trackpad px: content follows the fingers. */
-    fun scrollMove(dx: Float, dy: Float) {
+    override fun scrollMove(dx: Float, dy: Float) {
         val w = focusedWin() ?: return
         if (mouseMode.value) { scroll(if (dx > 0) 1f else if (dx < 0) -1f else 0f, if (dy < 0) 1f else if (dy > 0) -1f else 0f); return }
         if (!scrollDrag) scrollStart()
         scrollU = (scrollU + dx / w.width).coerceIn(0f, 1f); scrollV = (scrollV + dy / w.height).coerceIn(0f, 1f)
         touchAt(MotionEvent.ACTION_MOVE, scrollU, scrollV, w)
     }
-    fun scrollEnd() {
+    override fun scrollEnd() {
         val w = focusedWin() ?: return
         if (!scrollDrag) return
         scrollDrag = false
@@ -261,7 +270,7 @@ object AppWindows {
     }
 
     /** Two-finger scroll → mouse wheel at the cursor (lines; dy positive = up, dx positive = right). */
-    fun scroll(dx: Float, dy: Float) {
+    override fun scroll(dx: Float, dy: Float) {
         val w = focusedWin() ?: return
         val shell = ShellBridge.shell.value ?: return
         val now = SystemClock.uptimeMillis()
@@ -349,7 +358,7 @@ object AppWindows {
     }
 
     // ---- mouse mode: the cursor is a real mouse to the app (cloud gaming, remote desktops) ----
-    val mouseMode: MutableStateFlow<Boolean> = MutableStateFlow(false)
+    override val mouseMode: MutableStateFlow<Boolean> = MutableStateFlow(false)
     private fun mouseEvent(action: Int, buttons: Int, dx: Float = 0f, dy: Float = 0f, vscroll: Float = 0f, hscroll: Float = 0f): MotionEvent {
         val w = focusedWin()!!
         val now = SystemClock.uptimeMillis()
@@ -379,7 +388,7 @@ object AppWindows {
         return if (d == null) "id $id (no InputDevice)" else "${d.name} (id $id${if (d.isVirtual) ", virtual" else ""})"
     }
     /** Axis state: X Y Z RZ in -1..1, BRAKE GAS 0..1, HAT_X HAT_Y in -1/0/1. */
-    val axes = FloatArray(8)
+    override val axes = FloatArray(8)
     private var lastAxesSend = 0L
 
     /** A real controller paired to the phone, if any (it is forwarded as-is, see hardwareMotion).
@@ -456,7 +465,7 @@ object AppWindows {
 
     /** Make the controller known again: zero axes + no buttons, sent when a gamepad skin opens;
      *  also moves Android's focused display to the game's so kernel HID events go straight there. */
-    fun gamepadAnnounce() {
+    override fun gamepadAnnounce() {
         java.util.Arrays.fill(axes, 0f); buttonBits = 0
         focusGameDisplay()
         gamepadAxes(force = true)
@@ -475,7 +484,7 @@ object AppWindows {
     }
 
     /** Send the current axes as one joystick move (rate-limited to ~120 Hz). */
-    fun gamepadAxes(force: Boolean = false) {
+    override fun gamepadAxes(force: Boolean) {
         val w = focusedWin() ?: return
         val shell = ShellBridge.shell.value ?: return
         val now = SystemClock.uptimeMillis()
@@ -498,7 +507,7 @@ object AppWindows {
     }
 
     /** Gamepad button (KEYCODE_BUTTON_* or DPAD) press/release to the focused window. */
-    fun gamepadButton(keyCode: Int, down: Boolean) {
+    override fun gamepadButton(keyCode: Int, down: Boolean) {
         val w = focusedWin() ?: return
         val shell = ShellBridge.shell.value ?: return
         if (hidReady()) {
@@ -529,12 +538,12 @@ object AppWindows {
 
     /** Arrow keys (suggestion strips, menus) to the focused window; as controller d-pad in gamepad modes
      *  so apps like GeForce NOW stay in gamepad mode instead of switching to keyboard+mouse. */
-    fun arrow(keyCode: Int, asGamepad: Boolean = false) {
+    override fun arrow(keyCode: Int, asGamepad: Boolean) {
         if (asGamepad) { gamepadButton(keyCode, true); gamepadButton(keyCode, false) } else key(keyCode)
     }
 
     /** Type text into the focused window as key events (the phone's own keyboard supplies it). */
-    fun typeText(text: String) {
+    override fun typeText(text: String) {
         val w = focusedWin() ?: return
         val shell = ShellBridge.shell.value ?: return
         val kcm = android.view.KeyCharacterMap.load(android.view.KeyCharacterMap.VIRTUAL_KEYBOARD)
@@ -550,7 +559,7 @@ object AppWindows {
     }
 
     /** Back key etc. to the focused app. */
-    fun key(keyCode: Int) {
+    override fun key(keyCode: Int) {
         val w = focusedWin() ?: return
         val shell = ShellBridge.shell.value ?: return
         runCatching { shell.injectKey(w.displayId, keyCode, true, 0); shell.injectKey(w.displayId, keyCode, false, 0) }

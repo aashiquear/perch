@@ -26,4 +26,12 @@ final class PostcardTests: XCTestCase {
         ]
         XCTAssertEqual([UInt8](d), expected)
     }
+
+    func testGamepad() {
+        let d = Postcard.input([.gamepad(axes: [0.5, 0, 0, 0, 0, 1, 0, -1], buttons: 0x0101)])
+        let expected: [UInt8] = [1, 1, 6,
+            0x00, 0x00, 0x00, 0x3F, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x00, 0x00, 0x80, 0x3F, 0, 0, 0, 0,
+            0x00, 0x00, 0x80, 0xBF, 0x81, 0x02]
+        XCTAssertEqual([UInt8](d), expected)
+    }
 }

@@ -25,7 +25,7 @@ jobs:
           mkdir -p "$d"
           cp target/release/perchd target/release/perch "$d"/
           cp -r udev README.md LICENSE* "$d"/ 2>/dev/null || true
-          cp docs/UX.md "$d"/UX.md
+          cp docs/UX.md docs/LINUX.md "$d"/
           tar czf "$d.tar.gz" "$d"
           sha256sum "$d.tar.gz" > "$d.tar.gz.sha256"
       - uses: softprops/action-gh-release@v2
@@ -34,3 +34,34 @@ jobs:
             perch-*-linux-x86_64.tar.gz
             perch-*-linux-x86_64.tar.gz.sha256
           generate_release_notes: true
+
+  android:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v5
+        with: { distribution: temurin, java-version: "21" }
+      - uses: gradle/actions/setup-gradle@v4
+        with: { gradle-version: "8.11.1" }
+      - uses: dtolnay/rust-toolchain@stable
+        with: { targets: aarch64-linux-android }
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo install cargo-ndk
+      - name: NDK + CMake (runner SDK, licences accepted)
+        run: |
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses >/dev/null || true
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --install "ndk;27.0.12077973" "cmake;3.22.1" "platforms;android-35" "build-tools;35.0.0"
+          echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/27.0.12077973" >> "$GITHUB_ENV"
+      - name: build debug APK + unit tests
+        working-directory: apps/android
+        run: gradle assembleDebug testDebugUnitTest --no-daemon
+      - name: package
+        run: |
+          v="${GITHUB_REF_NAME}"
+          cp apps/android/app/build/outputs/apk/debug/app-debug.apk "perch-${v}-android-debug.apk"
+          sha256sum "perch-${v}-android-debug.apk" > "perch-${v}-android-debug.apk.sha256"
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            perch-*-android-debug.apk
+            perch-*-android-debug.apk.sha256

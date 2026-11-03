@@ -22,6 +22,7 @@ object Postcard {
     const val EV_SCROLL = 3
     const val EV_KEY = 4
     const val EV_TEXT = 5
+    const val EV_GAMEPAD = 6
 
     const val BTN_LEFT = 0
     const val BTN_RIGHT = 1
@@ -36,6 +37,8 @@ object Postcard {
         data class Scroll(val dx: Float, val dy: Float) : Event()
         data class Key(val usage: Int, val down: Boolean, val mods: Int) : Event()
         data class Text(val ch: String) : Event()
+        /** Whole controller state (since 1.6): 8 axes (−1..1 sticks, 0..1 triggers, hat −1/0/1) + button bits. */
+        data class Gamepad(val axes: FloatArray, val buttons: Int) : Event()
     }
 
     fun ping(nonce: Int): ByteArray = ByteArrayOutputStream().apply { varint(this, PKT_PING); varint(this, nonce) }.toByteArray()
@@ -50,6 +53,7 @@ object Postcard {
             is Event.Scroll -> { varint(out, EV_SCROLL); f32(out, e.dx); f32(out, e.dy) }
             is Event.Key -> { varint(out, EV_KEY); varint(out, e.usage); out.write(if (e.down) 1 else 0); out.write(e.mods and 0xff) }
             is Event.Text -> { varint(out, EV_TEXT); val b = e.ch.toByteArray(Charsets.UTF_8); varint(out, b.size); out.write(b) }
+            is Event.Gamepad -> { varint(out, EV_GAMEPAD); for (i in 0 until 8) f32(out, e.axes.getOrElse(i) { 0f }); varint(out, e.buttons and 0x7fff) }
         }
         return out.toByteArray()
     }

@@ -29,4 +29,13 @@ class PostcardTest {
         ).map { it.toByte() }.toByteArray()
         assertArrayEquals(expected, b)
     }
+
+    @Test fun gamepad() {
+        // Mirrors wire_format_tests::input_bytes' last event in perch-proto.
+        val b = Postcard.input(listOf(Postcard.Event.Gamepad(floatArrayOf(0.5f, 0f, 0f, 0f, 0f, 1f, 0f, -1f), 0x0101)))
+        val expected = byteArrayOf(1, 1, 6,
+            0x00, 0x00, 0x00, 0x3F, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x00, 0x00, 0x80.toByte(), 0x3F, 0, 0, 0, 0,
+            0x00, 0x00, 0x80.toByte(), 0xBF.toByte(), 0x81.toByte(), 0x02)
+        assertArrayEquals(expected, b)
+    }
 }

@@ -34,7 +34,30 @@ pub struct UinputSink {
     last_px: Option<(f32, f32)>,
     /// Target display size in pixels for absolute → relative conversion.
     pub display_px: (f32, f32),
+    /// Virtual Xbox-class gamepad, created on the first `Gamepad` event.
+    gamepad: Option<VirtualDevice>,
+    /// Last button bitmask sent to the gamepad (to emit only changes).
+    gamepad_buttons: u16,
 }
+
+/// evdev button codes in `InputEvent::Gamepad` bit order.
+const GAMEPAD_BUTTONS: [KeyCode; 15] = [
+    KeyCode::BTN_SOUTH,
+    KeyCode::BTN_EAST,
+    KeyCode::BTN_C,
+    KeyCode::BTN_NORTH,
+    KeyCode::BTN_WEST,
+    KeyCode::BTN_Z,
+    KeyCode::BTN_TL,
+    KeyCode::BTN_TR,
+    KeyCode::BTN_TL2,
+    KeyCode::BTN_TR2,
+    KeyCode::BTN_SELECT,
+    KeyCode::BTN_START,
+    KeyCode::BTN_MODE,
+    KeyCode::BTN_THUMBL,
+    KeyCode::BTN_THUMBR,
+];
 
 impl UinputSink {
     /// Create the virtual device ("Perch Virtual Input").
@@ -79,7 +102,75 @@ impl UinputSink {
             target: None,
             last_px: None,
             display_px,
+            gamepad: None,
+            gamepad_buttons: 0,
         })
+    }
+
+    /// "Perch Virtual Gamepad": the Xbox 360 layout every game and SDL knows
+    /// (sticks on X/Y and RX/RY, triggers on Z/RZ, hat on HAT0, BTN_SOUTH…).
+    fn gamepad_device() -> Result<VirtualDevice, InputError> {
+        let mut keys = AttributeSet::<KeyCode>::new();
+        for k in GAMEPAD_BUTTONS {
+            keys.insert(k);
+        }
+        let stick = AbsInfo::new(0, -32768, 32767, 16, 128, 0);
+        let trigger = AbsInfo::new(0, 0, 255, 0, 0, 0);
+        let hat = AbsInfo::new(0, -1, 1, 0, 0, 0);
+        let io = |e: std::io::Error| InputError::Unavailable(e.to_string());
+        VirtualDevice::builder()
+            .map_err(|e| InputError::Unavailable(format!("/dev/uinput: {e}")))?
+            .name("Perch Virtual Gamepad")
+            .input_id(evdev::InputId::new(evdev::BusType::BUS_USB, 0x045e, 0x028e, 0x0110))
+            .with_keys(&keys)
+            .map_err(io)?
+            .with_absolute_axis(&UinputAbsSetup::new(AbsoluteAxisCode::ABS_X, stick))
+            .map_err(io)?
+            .with_absolute_axis(&UinputAbsSetup::new(AbsoluteAxisCode::ABS_Y, stick))
+            .map_err(io)?
+            .with_absolute_axis(&UinputAbsSetup::new(AbsoluteAxisCode::ABS_RX, stick))
+            .map_err(io)?
+            .with_absolute_axis(&UinputAbsSetup::new(AbsoluteAxisCode::ABS_RY, stick))
+            .map_err(io)?
+            .with_absolute_axis(&UinputAbsSetup::new(AbsoluteAxisCode::ABS_Z, trigger))
+            .map_err(io)?
+            .with_absolute_axis(&UinputAbsSetup::new(AbsoluteAxisCode::ABS_RZ, trigger))
+            .map_err(io)?
+            .with_absolute_axis(&UinputAbsSetup::new(AbsoluteAxisCode::ABS_HAT0X, hat))
+            .map_err(io)?
+            .with_absolute_axis(&UinputAbsSetup::new(AbsoluteAxisCode::ABS_HAT0Y, hat))
+            .map_err(io)?
+            .build()
+            .map_err(|e| InputError::Unavailable(format!("uinput gamepad: {e}")))
+    }
+
+    fn gamepad(&mut self, axes: [f32; 8], buttons: u16) -> Result<(), InputError> {
+        if self.gamepad.is_none() {
+            self.gamepad = Some(Self::gamepad_device()?);
+            tracing::info!("virtual gamepad created");
+        }
+        let dev = self.gamepad.as_mut().expect("just created");
+        let s = |v: f32| (v.clamp(-1.0, 1.0) * 32767.0).round() as i32;
+        let t = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as i32;
+        let h = |v: f32| v.round().clamp(-1.0, 1.0) as i32;
+        let mut evs = vec![
+            EvEvent::new(EventType::ABSOLUTE.0, AbsoluteAxisCode::ABS_X.0, s(axes[0])),
+            EvEvent::new(EventType::ABSOLUTE.0, AbsoluteAxisCode::ABS_Y.0, s(axes[1])),
+            EvEvent::new(EventType::ABSOLUTE.0, AbsoluteAxisCode::ABS_RX.0, s(axes[2])),
+            EvEvent::new(EventType::ABSOLUTE.0, AbsoluteAxisCode::ABS_RY.0, s(axes[3])),
+            EvEvent::new(EventType::ABSOLUTE.0, AbsoluteAxisCode::ABS_Z.0, t(axes[4])),
+            EvEvent::new(EventType::ABSOLUTE.0, AbsoluteAxisCode::ABS_RZ.0, t(axes[5])),
+            EvEvent::new(EventType::ABSOLUTE.0, AbsoluteAxisCode::ABS_HAT0X.0, h(axes[6])),
+            EvEvent::new(EventType::ABSOLUTE.0, AbsoluteAxisCode::ABS_HAT0Y.0, h(axes[7])),
+        ];
+        let changed = buttons ^ self.gamepad_buttons;
+        for (bit, code) in GAMEPAD_BUTTONS.iter().enumerate() {
+            if changed & (1 << bit) != 0 {
+                evs.push(EvEvent::new(EventType::KEY.0, code.0, ((buttons >> bit) & 1) as i32));
+            }
+        }
+        self.gamepad_buttons = buttons;
+        dev.emit(&evs).map_err(InputError::Io)
     }
 
     fn abs_device() -> Result<VirtualDevice, InputError> {
@@ -189,6 +280,7 @@ impl InputSink for UinputSink {
                     Ok(())
                 }
             },
+            InputEvent::Gamepad { axes, buttons } => self.gamepad(axes, buttons),
             InputEvent::Text { ch } => {
                 if let Some((usage, shift)) = keymap::char_to_usage_us(ch) {
                     let code = keymap::hid_to_evdev(usage).unwrap_or(0);

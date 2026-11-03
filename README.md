@@ -96,7 +96,8 @@ With the glasses on:
 | bring an app back, close it, resize its display | bar tiles, dashboard, or `perch remove`, `perch close-app`, `perch resize` |
 | sound to the glasses, natural scrolling | dashboard → Sound & input |
 
-Quitting `perchd` returns every app to the laptop. More in [docs/UX.md](docs/UX.md).
+Quitting `perchd` returns every app to the laptop. Every option, shortcut and
+command: [docs/LINUX.md](docs/LINUX.md); the feel of it: [docs/UX.md](docs/UX.md).
 
 ### Android — phone as the host
 
@@ -134,8 +135,9 @@ First run:
    phone screen.
 
 Apps that block screen capture (banking, DRM video) show black; the card
-says so. The **Laptop remote** tab turns the phone into a trackpad and
-keyboard for `perchd` on a laptop.
+says so. The **Laptop remote** tab points the same pop-up at a laptop running
+`perchd`: touchpad, keyboard, arrow pad and the gamepad skins, which the
+laptop sees as a real Xbox-style controller.
 
 ## Developer workflow
 

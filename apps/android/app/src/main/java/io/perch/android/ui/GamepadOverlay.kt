@@ -23,7 +23,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import io.perch.android.host.AppWindows
+import io.perch.android.host.InputTarget
+import io.perch.android.host.LocalInputTarget
 import kotlin.math.atan2
 import kotlin.math.cos
 import kotlin.math.hypot
@@ -43,8 +44,8 @@ fun BoxScope.GamepadSkin(mode: Int) {
 
 // ---- axis helpers ------------------------------------------------------------
 
-private fun setAxis(i: Int, v: Float) { AppWindows.axes[i] = v.coerceIn(-1f, 1f); AppWindows.gamepadAxes() }
-private fun setAxes(vararg iv: Pair<Int, Float>) { for ((i, v) in iv) AppWindows.axes[i] = v.coerceIn(-1f, 1f); AppWindows.gamepadAxes(force = true) }
+private fun InputTarget.setAxis(i: Int, v: Float) { axes[i] = v.coerceIn(-1f, 1f); gamepadAxes() }
+private fun InputTarget.setAxes(vararg iv: Pair<Int, Float>) { for ((i, v) in iv) axes[i] = v.coerceIn(-1f, 1f); gamepadAxes(force = true) }
 
 /** Round stick; emits normalised (x, y) with y positive = down (Android convention). */
 @Composable
@@ -77,6 +78,7 @@ private fun Stick(size: Dp, label: String, onMove: (Float, Float) -> Unit) {
 /** Press-and-hold button sending a gamepad key code. */
 @Composable
 private fun PadButton(label: String, keyCode: Int, size: Dp = 52.dp, color: Color = MaterialTheme.colorScheme.secondaryContainer, shape: androidx.compose.ui.graphics.Shape = CircleShape) {
+    val t = LocalInputTarget.current
     Box(
         Modifier.size(size).clip(shape).background(color)
             .pointerInput(keyCode) {
@@ -84,12 +86,12 @@ private fun PadButton(label: String, keyCode: Int, size: Dp = 52.dp, color: Colo
                     while (true) {
                         val down = awaitPointerEvent()
                         if (down.changes.any { it.pressed && !it.previousPressed }) {
-                            AppWindows.gamepadButton(keyCode, true)
+                            t.gamepadButton(keyCode, true)
                             while (true) {
                                 val ev = awaitPointerEvent()
                                 if (ev.changes.all { !it.pressed }) break
                             }
-                            AppWindows.gamepadButton(keyCode, false)
+                            t.gamepadButton(keyCode, false)
                         }
                     }
                 }
@@ -101,19 +103,20 @@ private fun PadButton(label: String, keyCode: Int, size: Dp = 52.dp, color: Colo
 /** Four-way hat sending AXIS_HAT_X/Y. */
 @Composable
 private fun Hat(size: Dp) {
+    val t = LocalInputTarget.current
     Box(Modifier.size(size).clip(CircleShape).background(MaterialTheme.colorScheme.surfaceVariant)
         .pointerInput(Unit) {
             awaitPointerEventScope {
                 while (true) {
                     val ev = awaitPointerEvent()
                     val p = ev.changes.firstOrNull { it.pressed }
-                    if (p == null) { setAxes(6 to 0f, 7 to 0f); continue }
+                    if (p == null) { t.setAxes(6 to 0f, 7 to 0f); continue }
                     val c = Offset(this.size.width / 2f, this.size.height / 2f)
                     val d = p.position - c
                     val ang = atan2(d.y, d.x)
                     val hx = if (kotlin.math.abs(cos(ang)) > 0.5f) kotlin.math.sign(cos(ang)) else 0f
                     val hy = if (kotlin.math.abs(sin(ang)) > 0.5f) kotlin.math.sign(sin(ang)) else 0f
-                    setAxes(6 to hx, 7 to hy)
+                    t.setAxes(6 to hx, 7 to hy)
                 }
             }
         }, contentAlignment = Alignment.Center) { Text("✚", style = MaterialTheme.typography.titleLarge) }
@@ -143,6 +146,7 @@ private fun Pedal(label: String, width: Dp, height: Dp, onValue: (Float) -> Unit
 
 @Composable
 private fun BoxScope.XboxSkin() {
+    val t = LocalInputTarget.current
     Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(6.dp)) {
         // Row 1: triggers and bumpers at the corners, Xbox button in the middle.
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
@@ -160,10 +164,10 @@ private fun BoxScope.XboxSkin() {
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly, verticalAlignment = Alignment.CenterVertically) {
             Row(verticalAlignment = Alignment.Bottom, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                 PadButton("L3", KeyEvent.KEYCODE_BUTTON_THUMBL, 34.dp)
-                Stick(118.dp, "L") { x, y -> setAxes(0 to x, 1 to y) }
+                Stick(118.dp, "L") { x, y -> t.setAxes(0 to x, 1 to y) }
             }
             Row(verticalAlignment = Alignment.Bottom, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                Stick(118.dp, "R") { x, y -> setAxes(2 to x, 3 to y) }
+                Stick(118.dp, "R") { x, y -> t.setAxes(2 to x, 3 to y) }
                 PadButton("R3", KeyEvent.KEYCODE_BUTTON_THUMBR, 34.dp)
             }
         }
@@ -190,12 +194,13 @@ private fun BoxScope.XboxSkin() {
 
 @Composable
 private fun BoxScope.WheelSkin() {
+    val t = LocalInputTarget.current
     var angle by remember { mutableFloatStateOf(0f) }   // degrees, ±180 = full lock
     Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(6.dp)) {
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
             Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 PadButton("L", KeyEvent.KEYCODE_BUTTON_L1, 48.dp, shape = RoundedCornerShape(10.dp))
-                Pedal("brake", 56.dp, 140.dp, { setAxis(4, it) })
+                Pedal("brake", 56.dp, 140.dp, { t.setAxis(4, it) })
             }
             Box(
                 Modifier.size(190.dp).clip(CircleShape).background(MaterialTheme.colorScheme.surfaceVariant)
@@ -204,8 +209,8 @@ private fun BoxScope.WheelSkin() {
                         var last = 0f
                         detectDragGestures(
                             onDragStart = { last = Math.toDegrees(atan2((it - c).y, (it - c).x).toDouble()).toFloat() },
-                            onDragEnd = { angle = 0f; setAxis(0, 0f) },
-                            onDragCancel = { angle = 0f; setAxis(0, 0f) },
+                            onDragEnd = { angle = 0f; t.setAxis(0, 0f) },
+                            onDragCancel = { angle = 0f; t.setAxis(0, 0f) },
                         ) { change, _ ->
                             change.consume()
                             val a = Math.toDegrees(atan2((change.position - c).y, (change.position - c).x).toDouble()).toFloat()
@@ -213,7 +218,7 @@ private fun BoxScope.WheelSkin() {
                             if (d > 180f) d -= 360f; if (d < -180f) d += 360f
                             last = a
                             angle = (angle + d).coerceIn(-180f, 180f)
-                            setAxis(0, angle / 180f)
+                            t.setAxis(0, angle / 180f)
                         }
                     },
                 contentAlignment = Alignment.Center,
@@ -225,7 +230,7 @@ private fun BoxScope.WheelSkin() {
             }
             Column(verticalArrangement = Arrangement.spacedBy(6.dp), horizontalAlignment = Alignment.End) {
                 PadButton("R", KeyEvent.KEYCODE_BUTTON_R1, 48.dp, shape = RoundedCornerShape(10.dp))
-                Pedal("gas", 56.dp, 140.dp, { setAxis(5, it) })
+                Pedal("gas", 56.dp, 140.dp, { t.setAxis(5, it) })
             }
         }
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
@@ -241,13 +246,14 @@ private fun BoxScope.WheelSkin() {
 
 @Composable
 private fun BoxScope.FlightSkin() {
+    val t = LocalInputTarget.current
     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
         // Throttle holds its position (no spring-back), like a real quadrant.
-        Pedal("throttle", 64.dp, 200.dp, { setAxis(3, -(it * 2f - 1f)) }, springBack = false)
+        Pedal("throttle", 64.dp, 200.dp, { t.setAxis(3, -(it * 2f - 1f)) }, springBack = false)
         Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(2.dp)) {
-            Stick(170.dp, "stick") { x, y -> setAxes(0 to x, 1 to y) }
+            Stick(170.dp, "stick") { x, y -> t.setAxes(0 to x, 1 to y) }
             var rud by remember { mutableFloatStateOf(0f) }
-            Slider(rud, { rud = it; setAxis(2, it) }, Modifier.width(170.dp), valueRange = -1f..1f, onValueChangeFinished = { rud = 0f; setAxis(2, 0f) })
+            Slider(rud, { rud = it; t.setAxis(2, it) }, Modifier.width(170.dp), valueRange = -1f..1f, onValueChangeFinished = { rud = 0f; t.setAxis(2, 0f) })
             Text("rudder", style = MaterialTheme.typography.labelSmall)
         }
         Column(verticalArrangement = Arrangement.spacedBy(6.dp), horizontalAlignment = Alignment.CenterHorizontally) {

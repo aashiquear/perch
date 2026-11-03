@@ -28,7 +28,7 @@ use std::fmt;
 use uuid::Uuid;
 
 /// Protocol version. Bump `MAJOR` on any incompatible wire change.
-pub const PROTOCOL_VERSION: Version = Version { major: 1, minor: 5 };
+pub const PROTOCOL_VERSION: Version = Version { major: 1, minor: 6 };
 
 /// Semantic version of the wire protocol.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -470,6 +470,17 @@ pub enum InputEvent {
     Text {
         /// Unicode scalar value.
         ch: char,
+    },
+    /// Whole game-controller state, like a HID report (since 1.6). The host
+    /// presents it as a virtual Xbox-class gamepad.
+    Gamepad {
+        /// Left stick x, y; right stick x, y (−1..1, y positive = down);
+        /// left trigger, right trigger (0..1); hat x, y (−1, 0, 1).
+        axes: [f32; 8],
+        /// Buttons, one bit each: 0 A/south, 1 B/east, 2 C, 3 X/north,
+        /// 4 Y/west, 5 Z, 6 L1, 7 R1, 8 L2, 9 R2, 10 select, 11 start,
+        /// 12 mode, 13 L3, 14 R3.
+        buttons: u16,
     },
 }
 
@@ -923,17 +934,24 @@ mod wire_format_tests {
                 mods: 0b0011,
             },
             InputEvent::Text { ch: 'é' },
+            InputEvent::Gamepad {
+                axes: [0.5, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, -1.0],
+                buttons: 0x0101,
+            },
         ])
         .to_postcard()
         .unwrap();
         let expected: Vec<u8> = vec![
             1, // StreamPacket::Input
-            5, // 5 events
+            6, // 6 events
             0, 0x00, 0x00, 0x80, 0x3F, 0x00, 0x00, 0x00, 0xC0, // MouseMove 1.0, -2.0 (f32 LE)
             2, 1, 1, // MouseButton: variant 2, button Right(=1), down=true
             3, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x40, 0x40, // Scroll 0.0, 3.0
             4, 0x04, 0, 0x03, // Key: usage varint 4, down=false, mods=3
             5, 2, 0xC3, 0xA9, // Text: char as UTF-8 string, len 2
+            6,    // Gamepad: 8 × f32 LE, then buttons varint
+            0x00, 0x00, 0x00, 0x3F, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x00, 0x00, 0x80, 0x3F, 0, 0, 0, 0,
+            0x00, 0x00, 0x80, 0xBF, 0x81, 0x02, // -1.0; buttons 0x0101 = varint 81 02
         ];
         assert_eq!(b, expected);
     }

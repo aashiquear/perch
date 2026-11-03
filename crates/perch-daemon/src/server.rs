@@ -279,6 +279,20 @@ pub async fn run(
                     UiMsg::Input { window, events } => {
                         let source = engine.lock().await.ws.get(window).map(|w| w.source.clone());
                         let Some(source) = source else { continue };
+                        // Controller state is not something a capture session can deliver;
+                        // it always goes to the virtual gamepad.
+                        let (pads, events): (Vec<_>, Vec<_>) =
+                            events.into_iter().partition(|e| matches!(e, InputEvent::Gamepad { .. }));
+                        if let (Some(sink), false) = (local_sink.as_mut(), pads.is_empty()) {
+                            for e in pads {
+                                if let Err(err) = sink.inject(e) {
+                                    tracing::debug!("inject: {err}");
+                                }
+                            }
+                        }
+                        if events.is_empty() {
+                            continue;
+                        }
                         if perch_input::source_peer(&source) == me {
                             // The capture session can usually deliver input itself
                             // (portal RemoteDesktop), with stream-relative placement.

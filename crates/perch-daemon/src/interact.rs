@@ -207,7 +207,7 @@ impl Interaction {
                         forward.push((id, *ev));
                     }
                 }
-                InputEvent::MouseMoveAbs { .. } | InputEvent::Text { .. } => {}
+                InputEvent::MouseMoveAbs { .. } | InputEvent::Text { .. } | InputEvent::Gamepad { .. } => {}
             }
         }
         // Pointer position for the application under the spatial pointer,

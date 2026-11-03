@@ -938,6 +938,7 @@ async fn inject(s: &mut MutterSession, events: &[InputEvent]) {
                 }
                 None => Ok(()),
             },
+            InputEvent::Gamepad { .. } => Ok(()),
             InputEvent::Text { ch } => {
                 let sym: u32 = if (ch as u32) < 0x100 {
                     ch as u32

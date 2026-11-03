@@ -578,6 +578,8 @@ async fn inject_events(
                 Some(code) => rd.notify_keyboard_keycode(session, code as i32, key_state(down)).await,
                 None => Ok(()),
             },
+            // Controllers are not a RemoteDesktop concept; the uinput sink handles them.
+            InputEvent::Gamepad { .. } => Ok(()),
             InputEvent::Text { ch } => {
                 let sym = if (ch as u32) < 0x100 {
                     ch as i32

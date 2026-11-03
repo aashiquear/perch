@@ -101,6 +101,9 @@ InputEvent = varint(variant) ++ fields
   3 scroll          dx f32, dy f32          (lines; + = up/left)
   4 key             usage varint (HID page 7), down u8, mods u8 (1 ctrl,2 shift,4 alt,8 gui)
   5 text            UTF-8 string: varint(len) ++ bytes
+  6 gamepad         axes f32×8 LE (lx, ly, rx, ry −1..1 with y down; lt, rt 0..1; hat x, y −1/0/1),
+                    buttons varint u16 (bit 0 A, 1 B, 2 C, 3 X, 4 Y, 5 Z, 6 L1, 7 R1, 8 L2, 9 R2,
+                    10 select, 11 start, 12 mode, 13 L3, 14 R3)   — since 1.6
 ```
 
 Byte-exact examples (also in `wire_format_tests`, `PostcardTest.kt`,
@@ -109,13 +112,14 @@ Byte-exact examples (also in `wire_format_tests`, `PostcardTest.kt`,
 ```
 Ping(1)    → 02 01
 Ping(300)  → 02 AC 02
-Input[MouseMove(1,-2), MouseButton(Right,down), Scroll(0,3), Key(0x04,up,mods=3), Text("é")]
-           → 01 05
+Input[MouseMove(1,-2), MouseButton(Right,down), Scroll(0,3), Key(0x04,up,mods=3), Text("é"), Gamepad(lx=0.5, rt=1, hat_y=-1, buttons=0x0101)]
+           → 01 06
              00 00 00 80 3F 00 00 00 C0
              02 01 01
              03 00 00 00 00 00 00 40 40
              04 04 00 03
              05 02 C3 A9
+             06 00 00 00 3F 00×20 00 00 80 3F 00 00 00 00 00 00 80 BF 81 02
 ```
 
 A controller subscribes to poses by sending any `Ping` on UDP; the host keeps
@@ -123,6 +127,6 @@ sending poses to that address for 10 s after the last ping.
 
 ## Versioning
 
-Current: **1.5** (`move_to_glasses`, `close_app_window`, `resize_display`; 1.4 = `set_window_span`, `grid.block_w_m`; 1.3 = flow-row grid: `Grid` fields and `slot_window` arguments changed, `set_window_pixels` added; 1.2 added the grid commands and `state.grid`; 1.1 added `pick_sources`). 
+Current: **1.6** (`gamepad` input event, presented by the host as a virtual Xbox-class controller; 1.5 = `move_to_glasses`, `close_app_window`, `resize_display`; 1.4 = `set_window_span`, `grid.block_w_m`; 1.3 = flow-row grid: `Grid` fields and `slot_window` arguments changed, `set_window_pixels` added; 1.2 added the grid commands and `state.grid`; 1.1 added `pick_sources`). 
 `PROTOCOL_VERSION.major` bumps on incompatible change. Add fields with
 `#[serde(default)]` to stay minor-compatible.
