@@ -3,12 +3,20 @@ package io.perch.android.touchpad
 import android.view.KeyEvent
 import io.perch.android.host.InputTarget
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlin.math.abs
+import kotlin.math.ln
 
 /**
  * The pop-up's input sent to a laptop running perchd: mouse, keys, text and
  * the whole controller state over the UDP stream (protocol 1.6).
  */
 class RemoteTarget(private val client: PerchClient) : InputTarget {
+    private companion object {
+        /** HID usage of left Ctrl. */
+        const val CTRL = 0xe0
+        /** ln(1.1): one wheel notch per 10 % pinch. */
+        val ZOOM_STEP = ln(1.1f)
+    }
     private fun send(vararg ev: Postcard.Event) = client.sendInput(Postcard.input(ev.toList()))
 
     override fun cursorMove(dx: Float, dy: Float) = send(Postcard.Event.MouseMove(dx, dy))
@@ -24,6 +32,18 @@ class RemoteTarget(private val client: PerchClient) : InputTarget {
     }
     private var accX = 0f; private var accY = 0f
     override fun scrollEnd() { accX = 0f; accY = 0f }
+    /** A laptop zooms with Ctrl+wheel: one notch per ~10 % change in finger span. */
+    override fun pinch(scale: Float) {
+        if (scale <= 0f) return
+        zoomAcc += ln(scale)
+        while (abs(zoomAcc) >= ZOOM_STEP) {
+            val dir = if (zoomAcc > 0) 1f else -1f
+            zoomAcc -= dir * ZOOM_STEP
+            send(Postcard.Event.Key(CTRL, true, 1), Postcard.Event.Scroll(0f, dir), Postcard.Event.Key(CTRL, false, 0))
+        }
+    }
+    override fun pinchEnd() { zoomAcc = 0f }
+    private var zoomAcc = 0f
 
     override fun key(keyCode: Int) {
         val u = HidMap.usage(keyCode) ?: return

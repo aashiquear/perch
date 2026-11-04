@@ -19,6 +19,9 @@ interface InputTarget {
     /** Content follows the fingers (trackpad px). */
     fun scrollMove(dx: Float, dy: Float)
     fun scrollEnd()
+    /** Two-finger pinch: [scale] is the finger-span ratio since the last call (> 1 = apart = zoom in). */
+    fun pinch(scale: Float)
+    fun pinchEnd()
     fun key(keyCode: Int)
     fun arrow(keyCode: Int, asGamepad: Boolean = false)
     fun typeText(text: String)

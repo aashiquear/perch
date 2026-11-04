@@ -74,8 +74,8 @@ phone screen (panel, Compose)             glasses display (Presentation + GL)
   `VirtualDisplay.resize` — the app gets a configuration change, the phone
   screen itself never rotates.
 - **Cursor and touchpad.** A pop-up sheet on the panel (same gestures as
-  the laptop touchpad: 1 finger move, tap = tap, 2 fingers scroll, 3-finger
-  swipe = next/previous window) moves a cursor drawn by the renderer in the
+  the laptop touchpad: 1 finger move, tap = tap, 2 fingers scroll, 2-finger
+  pinch = zoom in/out, 3-finger swipe = next/previous window) moves a cursor drawn by the renderer in the
   focused window; taps become touch events injected at the cursor, scrolls
   become mouse-wheel events, both routed to that window's display id.
   Keyboard: a Bluetooth keyboard paired with the phone is forwarded to the
@@ -170,6 +170,11 @@ Shizuku user-service docs.
   wheel events (Mouse mode); the scroll-lock corner shows spring-back
   scrollers that send wheel events, which apps with their own scroll bars
   (Word) honour.
+- Zoom: a two-finger pinch (span changes more than the fingers travel
+  together) is injected as a two-finger touch spreading/closing around the
+  cursor (Touch mode), or as Ctrl+wheel notches, one per ~10 % of span
+  (Mouse mode and the Laptop remote, where perchd presses Ctrl around the
+  wheel). No protocol change.
 - Glasses "brightness" is software dimming in the renderer (colour × factor);
   the Rokid driver exposes no hardware brightness, the temple rocker does.
 - `wm set-ignore-orientation-request` is reset on each display before it is

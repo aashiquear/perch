@@ -11,6 +11,9 @@ import android.view.Surface
 import io.perch.android.native.PerchNative
 import io.perch.android.shell.ShellBridge
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlin.math.abs
+import kotlin.math.hypot
+import kotlin.math.ln
 
 /**
  * The phone-as-host window list: one entry per app shown on the glasses,
@@ -269,9 +272,67 @@ object AppWindows : InputTarget {
         ev.recycle()
     }
 
+    // ---- two-finger pinch: a two-finger touch spreading around the cursor (mouse mode: Ctrl+wheel) ----
+    private var pinching = false
+    /** Distance between the two injected fingers, in window px. */
+    private var pinchSpan = 0f
+    private var pinchAcc = 0f
+    override fun pinch(scale: Float) {
+        val w = focusedWin() ?: return
+        if (scale <= 0f) return
+        if (mouseMode.value) {
+            // One wheel notch per ~10 % change in finger span.
+            val step = ln(1.1f)
+            pinchAcc += ln(scale)
+            while (abs(pinchAcc) >= step) {
+                val dir = if (pinchAcc > 0) 1f else -1f
+                pinchAcc -= dir * step
+                wheel(w, 0f, dir, android.view.KeyEvent.META_CTRL_ON or android.view.KeyEvent.META_CTRL_LEFT_ON)
+            }
+            return
+        }
+        if (!pinching) {
+            if (scrollDrag) scrollEnd()
+            pinching = true
+            pinchSpan = minOf(w.width, w.height) * 0.25f
+            pinchTouch(MotionEvent.ACTION_DOWN, 1, w)
+            pinchTouch(MotionEvent.ACTION_POINTER_DOWN or (1 shl MotionEvent.ACTION_POINTER_INDEX_SHIFT), 2, w)
+        }
+        pinchSpan = (pinchSpan * scale).coerceIn(24f, hypot(w.width.toFloat(), w.height.toFloat()))
+        pinchTouch(MotionEvent.ACTION_MOVE, 2, w)
+    }
+    override fun pinchEnd() {
+        pinchAcc = 0f
+        if (!pinching) return
+        pinching = false
+        val w = focusedWin() ?: return
+        pinchTouch(MotionEvent.ACTION_POINTER_UP or (1 shl MotionEvent.ACTION_POINTER_INDEX_SHIFT), 2, w)
+        pinchTouch(MotionEvent.ACTION_UP, 1, w)
+    }
+    /** Fingers sit left and right of the cursor, [pinchSpan] apart, clamped to the window. */
+    private fun pinchTouch(action: Int, pointers: Int, w: Win) {
+        val shell = ShellBridge.shell.value ?: return
+        val now = SystemClock.uptimeMillis()
+        if (action == MotionEvent.ACTION_DOWN) downTime = now
+        val cx = cursorU * w.width; val cy = cursorV * w.height; val half = pinchSpan / 2
+        val props = Array(pointers) { i -> MotionEvent.PointerProperties().apply { id = i; toolType = MotionEvent.TOOL_TYPE_FINGER } }
+        val coords = Array(pointers) { i ->
+            MotionEvent.PointerCoords().apply {
+                x = (if (i == 0) cx - half else cx + half).coerceIn(0f, w.width - 1f)
+                y = cy; pressure = 1f; size = 1f
+            }
+        }
+        val ev = MotionEvent.obtain(downTime, now, action, pointers, props, coords, 0, 0, 1f, 1f, 0, 0, InputDevice.SOURCE_TOUCHSCREEN, 0)
+        runCatching { shell.injectMotion(w.displayId, ev) }.onFailure { Log.w(TAG, "inject pinch: $it") }
+        ev.recycle()
+    }
+
     /** Two-finger scroll → mouse wheel at the cursor (lines; dy positive = up, dx positive = right). */
     override fun scroll(dx: Float, dy: Float) {
         val w = focusedWin() ?: return
+        wheel(w, dx, dy, 0)
+    }
+    private fun wheel(w: Win, dx: Float, dy: Float, metaState: Int) {
         val shell = ShellBridge.shell.value ?: return
         val now = SystemClock.uptimeMillis()
         val props = arrayOf(MotionEvent.PointerProperties().apply { id = 0; toolType = MotionEvent.TOOL_TYPE_MOUSE })
@@ -280,7 +341,7 @@ object AppWindows : InputTarget {
             setAxisValue(MotionEvent.AXIS_VSCROLL, dy)
             setAxisValue(MotionEvent.AXIS_HSCROLL, dx)
         })
-        val ev = MotionEvent.obtain(now, now, MotionEvent.ACTION_SCROLL, 1, props, coords, 0, 0, 1f, 1f, 0, 0, InputDevice.SOURCE_MOUSE, 0)
+        val ev = MotionEvent.obtain(now, now, MotionEvent.ACTION_SCROLL, 1, props, coords, metaState, 0, 1f, 1f, 0, 0, InputDevice.SOURCE_MOUSE, 0)
         runCatching { shell.injectMotion(w.displayId, ev) }
         ev.recycle()
     }

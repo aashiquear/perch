@@ -60,6 +60,7 @@ import io.perch.android.host.GlassesService
 import io.perch.android.host.MirrorSource
 import io.perch.android.shell.ShellBridge
 import kotlin.math.abs
+import kotlin.math.hypot
 
 /**
  * The phone-side dashboard for phone-as-host: the Android twin of the Linux
@@ -513,8 +514,8 @@ private fun AppPicker(ctx: Context, onPick: (String, Boolean) -> Unit, onDismiss
 
 /**
  * One finger moves the cursor (with acceleration), tap = tap, double-tap and
- * hold = drag, two fingers = scroll, three-finger swipe = next/previous
- * window. The phone is the trackpad; the cursor is drawn on the glasses.
+ * hold = drag, two fingers = scroll, two-finger pinch = zoom in/out,
+ * three-finger swipe = next/previous window. The phone is the trackpad; the cursor is drawn on the glasses.
  */
 /**
  * Docked at the bottom of the panel, not a ModalBottomSheet: the sheet's own
@@ -557,12 +558,6 @@ internal fun BoxScope.TouchpadOverlay(ctx: Context, mode: Int, onMode: (Int) -> 
                 }
             }
             LaunchedEffect(mode) { if (mode != 0) target.gamepadAnnounce() }
-            val gpErr by AppWindows.gamepadError.collectAsStateWithLifecycle()
-            val gpInfo by AppWindows.gamepadInfo.collectAsStateWithLifecycle()
-            if (mode != 0 && local) {
-                gpErr?.let { Text("Controller identity unavailable ($it); games that insist on a real gamepad may ignore input.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error) }
-                Text(gpInfo, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            }
             val gestures = remember { PhoneTouchpad() }
             gestures.target = target
             var dragLock by remember { mutableStateOf(false) }
@@ -602,7 +597,7 @@ internal fun BoxScope.TouchpadOverlay(ctx: Context, mode: Int, onMode: (Int) -> 
                 ) {
                     Text(
                         if (dragLock) "DRAG MODE: slide = drag with the button held\ntap the lock to go back" else
-                        (if (mouse) "mouse: " else "touch: ") + "1 finger move · tap · rim or double-tap+hold: drag\n2 fingers: scroll · 3-finger swipe: next window",
+                        (if (mouse) "mouse: " else "touch: ") + "1 finger move · tap · rim or double-tap+hold: drag\n2 fingers: scroll · pinch: zoom · 3-finger swipe: next window",
                         style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
                         textAlign = androidx.compose.ui.text.style.TextAlign.Center,
                     )
@@ -668,6 +663,12 @@ private class PhoneTouchpad {
     private var maxFingers = 0; private var moved = false; private var dragging = false
     private var scrollAcc = 0f; private var scrollAccX = 0f; private var threeStartX = 0f
     private val gain = 2.2f
+    /** Pointer that lastX/lastY track; when it lifts, the next one is re-anchored instead of jumping. */
+    private var lastId = -1
+    // Two fingers: undecided until they either spread/close (pinch) or travel together (scroll).
+    private var two = TWO_UNDECIDED
+    private var spanStart = 0f; private var spanLast = 0f
+    private var midX0 = 0f; private var midY0 = 0f
 
     /** Pad size in px, from onSizeChanged. */
     @Volatile var padW = 0f
@@ -676,22 +677,36 @@ private class PhoneTouchpad {
     fun onTouch(e: MotionEvent): Boolean {
         when (e.actionMasked) {
             MotionEvent.ACTION_DOWN -> {
-                lastX = e.x; lastY = e.y; downT = SystemClock.uptimeMillis(); maxFingers = 1; moved = false; scrollAcc = 0f; scrollAccX = 0f
+                lastX = e.x; lastY = e.y; lastId = e.getPointerId(0); two = TWO_UNDECIDED; downT = SystemClock.uptimeMillis(); maxFingers = 1; moved = false; scrollAcc = 0f; scrollAccX = 0f
                 val onRim = edgePx > 0f && (e.x < edgePx || e.y < edgePx || e.x > padW - edgePx || e.y > padH - edgePx)
                 if (dragLock || onRim || downT - lastTapT < 250) { dragging = true; target.pressDown() }
             }
             MotionEvent.ACTION_POINTER_DOWN -> {
                 maxFingers = maxOf(maxFingers, e.pointerCount)
                 if (e.pointerCount == 3) threeStartX = e.getX(0)
-                lastX = e.getX(0); lastY = e.getY(0)
+                if (e.pointerCount == 2) {
+                    two = TWO_UNDECIDED; spanStart = span(e); spanLast = spanStart
+                    midX0 = (e.getX(0) + e.getX(1)) / 2; midY0 = (e.getY(0) + e.getY(1)) / 2
+                } else if (two == TWO_PINCH) { target.pinchEnd(); two = TWO_SCROLL }
+                lastX = e.getX(0); lastY = e.getY(0); lastId = e.getPointerId(0)
             }
             MotionEvent.ACTION_MOVE -> {
+                if (e.getPointerId(0) != lastId) { lastX = e.getX(0); lastY = e.getY(0); lastId = e.getPointerId(0) }
                 val dx = e.getX(0) - lastX; val dy = e.getY(0) - lastY
                 lastX = e.getX(0); lastY = e.getY(0)
                 if (abs(dx) + abs(dy) > 2f) moved = true
                 when (e.pointerCount) {
                     1 -> { val a = 1f + (abs(dx) + abs(dy)) / 40f; target.cursorMove(dx * gain * a, dy * gain * a) }
-                    2 -> {
+                    2 -> if (two == TWO_UNDECIDED) {
+                        val dSpan = abs(span(e) - spanStart)
+                        val travel = hypot((e.getX(0) + e.getX(1)) / 2 - midX0, (e.getY(0) + e.getY(1)) / 2 - midY0)
+                        if (dSpan > PINCH_SLOP && dSpan > travel) { two = TWO_PINCH; moved = true; spanLast = span(e) }
+                        else if (travel > SCROLL_SLOP) two = TWO_SCROLL
+                    } else if (two == TWO_PINCH) {
+                        val sp = span(e)
+                        if (spanLast > 1f && sp > 1f) target.pinch(sp / spanLast)
+                        spanLast = sp
+                    } else {
                         if (target.mouseMode.value) {
                             scrollAcc += dy; scrollAccX += dx
                             if (abs(scrollAcc) > 24f) { target.scroll(0f, if (scrollAcc > 0) 1f else -1f); scrollAcc = 0f }
@@ -703,9 +718,18 @@ private class PhoneTouchpad {
                     }
                 }
             }
-            MotionEvent.ACTION_POINTER_UP -> if (e.pointerCount == 2) target.scrollEnd()
+            MotionEvent.ACTION_POINTER_UP -> if (e.pointerCount == 2) {
+                if (two == TWO_PINCH) target.pinchEnd() else target.scrollEnd()
+                two = TWO_UNDECIDED
+            } else if (e.pointerCount == 3) two = TWO_SCROLL   // 3 → 2 fingers keeps scrolling, as before
+            MotionEvent.ACTION_CANCEL -> {
+                target.pinchEnd(); target.scrollEnd(); two = TWO_UNDECIDED
+                if (dragging) { dragging = false; target.pressUp() }
+            }
             MotionEvent.ACTION_UP -> {
                 val now = SystemClock.uptimeMillis()
+                if (two == TWO_PINCH) target.pinchEnd()
+                two = TWO_UNDECIDED
                 target.scrollEnd()
                 if (dragging) { dragging = false; target.pressUp() }
                 else if (!moved && now - downT < 220) {
@@ -719,5 +743,15 @@ private class PhoneTouchpad {
             }
         }
         return true
+    }
+
+    private fun span(e: MotionEvent) = hypot(e.getX(1) - e.getX(0), e.getY(1) - e.getY(0))
+
+    private companion object {
+        const val TWO_UNDECIDED = 0; const val TWO_SCROLL = 1; const val TWO_PINCH = 2
+        /** Span change (px) that makes two fingers a pinch, if it beats their joint travel. */
+        const val PINCH_SLOP = 36f
+        /** Joint travel (px) that makes two fingers a scroll. */
+        const val SCROLL_SLOP = 18f
     }
 }
