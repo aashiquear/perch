@@ -52,6 +52,14 @@ BIN="$(swift build -c release --package-path "$WORK/wrapper" --scratch-path "$WO
 # 3. The bundle: executable, resources, icon, Info.plist.
 APP="$WORK/Payload/Perch.app"
 cp "$BIN/Perch-App" "$APP/Perch"
+if [ "$(uname -s)" = "Darwin" ]; then
+  # SwiftPM records the *macOS* SDK's version number in an iOS binary it
+  # cross-builds (seen: "sdk 15.5" from Xcode 16.4). UIKit chooses behaviours
+  # by that number, so stamp what the Linux build carries and the app was
+  # tested with: SDK version = deployment target.
+  xcrun vtool -set-build-version ios "$MIN_IOS" "$MIN_IOS" -replace -output "$APP/Perch" "$APP/Perch"
+  xcrun vtool -show-build "$APP/Perch" | grep -E 'platform|minos|sdk'
+fi
 for b in "$BIN"/*.bundle; do [ -d "$b" ] && cp -R "$b" "$APP/"; done
 cp "$APPDIR/AppIcon.png" "$APP/AppIcon.png"
 BUNDLE_ID="$(sed -n 's/^bundleID: *//p' "$APPDIR/xtool.yml")"
