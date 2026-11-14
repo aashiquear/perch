@@ -12,6 +12,8 @@ apps/android/local.properties
 apps/ipad/Perch.xcodeproj
 apps/ipad/*.xcworkspace
 apps/ipad/DerivedData
+apps/ipad/.build
+apps/ipad/xtool
 # editors
 .idea
 .vscode

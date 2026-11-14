@@ -14,6 +14,7 @@
 use nalgebra::Vector3;
 use perch_proto::{Anchor, Placement, Pose, Source, SpatialWindow};
 use perch_space::{DisplayOptics, Projector, Workspace};
+use perch_tracking::external::{ExternalConfig, ExternalTracker, SensorFrame};
 use perch_tracking::{Calibration, ImuSample, Tracker, TrackerConfig};
 use std::ffi::{c_char, c_int, CStr};
 
@@ -177,6 +178,76 @@ unsafe fn copy_str(s: &str, buf: *mut c_char, cap: usize) -> c_int {
         *buf.add(need) = 0;
     }
     need as c_int
+}
+
+// ---------------------------------------------------------------------------
+// External orientation source (headset with its own fusion)
+// ---------------------------------------------------------------------------
+
+/// Opaque handle of a tracker fed with orientations instead of raw IMU data.
+pub struct PerchExtTracker(ExternalTracker);
+
+/// Create one. `frame`: 0 = the source already uses RUB, 1 = Bose AR headset.
+/// `display_delay_us` is added to every prediction.
+#[no_mangle]
+pub extern "C" fn perch_ext_tracker_new(frame: c_int, display_delay_us: u64) -> *mut PerchExtTracker {
+    let frame = match frame {
+        1 => SensorFrame::bose_ar(),
+        _ => SensorFrame::rub(),
+    };
+    let cfg = ExternalConfig {
+        base_latency_s: display_delay_us as f32 * 1e-6,
+        ..ExternalConfig::default()
+    };
+    Box::into_raw(Box::new(PerchExtTracker(ExternalTracker::new(frame, cfg))))
+}
+
+/// Free.
+#[no_mangle]
+pub unsafe extern "C" fn perch_ext_tracker_free(t: *mut PerchExtTracker) {
+    if !t.is_null() {
+        drop(Box::from_raw(t));
+    }
+}
+
+/// Feed one sample: the sensor's 16-bit millisecond clock, the host time the
+/// packet arrived (seconds, any monotonic origin), and its quaternion x,y,z,w.
+#[no_mangle]
+pub unsafe extern "C" fn perch_ext_tracker_feed(
+    t: *mut PerchExtTracker,
+    ticks_ms: u16,
+    host_s: f64,
+    q_xyzw: *const f32,
+) -> c_int {
+    if t.is_null() || q_xyzw.is_null() {
+        return -1;
+    }
+    let q = std::slice::from_raw_parts(q_xyzw, 4);
+    (*t).0.feed(ticks_ms, host_s, [q[0], q[1], q[2], q[3]]);
+    0
+}
+
+/// Pose for a frame shown at `host_s` (same clock as `feed`), in the 8-float
+/// layout of `perch_tracker_predict`. Returns 0, or -1 before the first sample.
+#[no_mangle]
+pub unsafe extern "C" fn perch_ext_tracker_pose(t: *const PerchExtTracker, host_s: f64, out8: *mut f32) -> c_int {
+    if t.is_null() || out8.is_null() {
+        return -1;
+    }
+    write_pose(&(*t).0.pose_at(host_s), out8);
+    if (*t).0.has_pose() {
+        0
+    } else {
+        -1
+    }
+}
+
+/// The wearer looks straight ahead with a level head now.
+#[no_mangle]
+pub unsafe extern "C" fn perch_ext_tracker_recenter(t: *mut PerchExtTracker) {
+    if !t.is_null() {
+        (*t).0.recenter();
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -383,6 +454,37 @@ pub unsafe extern "C" fn perch_space_project(
     q.on_screen as c_int
 }
 
+/// Width in metres of a window that exactly spans the panel at `distance`.
+#[no_mangle]
+pub unsafe extern "C" fn perch_space_fill_width(s: *const PerchSpace, distance: f32) -> f32 {
+    if s.is_null() {
+        return 0.0;
+    }
+    (*s).projector.optics.width_at(distance)
+}
+
+/// Hang every window side by side at `distance`, `gap_m` apart, centred on
+/// yaw 0 and pitch `pitch`, in index order from left to right.
+#[no_mangle]
+pub unsafe extern "C" fn perch_space_arrange_row(s: *mut PerchSpace, distance: f32, gap_m: f32, pitch: f32) -> c_int {
+    if s.is_null() {
+        return -1;
+    }
+    let sp = &mut *s;
+    let widths: Vec<f32> = sp.ws.windows.iter().map(|w| w.placement.width_m).collect();
+    for (w, yaw) in sp
+        .ws
+        .windows
+        .iter_mut()
+        .zip(perch_space::row_yaws(&widths, distance, gap_m))
+    {
+        w.placement.yaw = yaw;
+        w.placement.pitch = pitch;
+        w.placement.distance = distance;
+    }
+    0
+}
+
 /// Workspace JSON (for persistence). Same buffer convention as calibration.
 #[no_mangle]
 pub unsafe extern "C" fn perch_space_json(s: *const PerchSpace, buf: *mut c_char, cap: usize) -> c_int {
@@ -511,6 +613,41 @@ pub unsafe extern "C" fn perch_glasses_set_mode(g: *mut PerchGlasses, mode: c_in
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ext_tracker_and_row_through_ffi() {
+        unsafe {
+            let t = perch_ext_tracker_new(1, 20_000);
+            let mut pose = [0f32; 8];
+            assert_eq!(perch_ext_tracker_pose(t, 0.0, pose.as_mut_ptr()), -1);
+            // The headset's recorded "straight" and "left" poses.
+            assert_eq!(
+                perch_ext_tracker_feed(t, 0, 1.0, [0.894f32, 0.429, -0.002, 0.130].as_ptr()),
+                0
+            );
+            assert_eq!(perch_ext_tracker_pose(t, 1.0, pose.as_mut_ptr()), 0);
+            assert!(pose[0] > 0.999, "recentred on the first sample: {pose:?}");
+            perch_ext_tracker_feed(t, 5000, 6.0, [0.579f32, 0.804, 0.078, 0.115].as_ptr());
+            perch_ext_tracker_pose(t, 6.0, pose.as_mut_ptr());
+            assert!(pose[2] > 0.3, "left turn = + rotation about Y: {pose:?}");
+            perch_ext_tracker_recenter(t);
+            perch_ext_tracker_pose(t, 6.0, pose.as_mut_ptr());
+            assert!(pose[0] > 0.999);
+            perch_ext_tracker_free(t);
+
+            let s = perch_space_new(1920, 1080, 0.8, 0.0);
+            for _ in 0..3 {
+                perch_space_upsert(s, -1, 2, 1280, 720, 0.0, 0.0, 2.0, 1.2, 0.675, 0);
+            }
+            assert_eq!(perch_space_arrange_row(s, 2.0, 0.08, 0.0), 0);
+            let mut p = [[0f32; 5]; 3];
+            for (i, o) in p.iter_mut().enumerate() {
+                perch_space_placement(s, i as c_int, o.as_mut_ptr());
+            }
+            assert!(p[0][0] > 0.0 && p[1][0].abs() < 1e-6 && p[2][0] < 0.0, "{p:?}");
+            perch_space_free(s);
+        }
+    }
 
     #[test]
     fn tracker_through_ffi() {

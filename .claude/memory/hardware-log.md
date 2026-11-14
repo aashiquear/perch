@@ -90,3 +90,72 @@
 - Whenever the monitor set changes (virtual display added/removed), Mutter moves a fullscreen window that sits on a secondary monitor (Perch's glasses window on DP-5) onto the primary and gives it focus. Seen with and without gdctl rearrangement. Leaving fullscreen ~0.7 s before the change and re-fullscreening ~2.5 s after avoids it (render.rs unpinned_at).
 - Rearranging monitors with gdctl (DP-5 below the laptop, newest display first) is no longer done: GNOME's own append-to-the-right layout is stable and the shortcut simply hops N monitors; moving existing virtual displays sent their windows back to the laptop.
 - Default `display.monitor_name = "Rokid"` now resolves to the connector through `gdctl show`.
+
+## 2026-11-14 — iPad (M2, iPadOS 27.0.1) with Rokid Max on USB-C, first host-mode check
+*Measured by the in-app check (Glasses tab), report sent from the device.*
+- iPadOS hands the app an external-display scene for the glasses
+  (`windowExternalDisplayNonInteractive`), **1920×1080, scale 1.0, up to 60 Hz**
+  (not 120). With the SwiftUI life cycle a scene delegate set in
+  `configurationForConnecting` was never called; the app now attaches its own
+  `UIWindow` on `UIScene.willConnectNotification` (not yet confirmed on device).
+- The glasses are **visible in the IORegistry** to a sandboxed app: one
+  `IOUSBHostDevice "Rokid Max"`, five `IOUSBHostInterface`. Vendor/product id
+  properties are hidden from the app.
+- `IOHIDManagerOpen` → `0xe00002e2` (not permitted, sandbox). Opening the USB
+  device itself was not attempted in this round (the probe matched on vendor
+  id, which is hidden); second round pending.
+- Earphone head tracking (`CMHeadphoneMotionManager`): available on the iPad;
+  not exercised yet.
+
+## 2026-11-14 — iPad host-mode check, second round (same iPad, Rokid Max on USB-C)
+*Measured on the device; the owner confirmed the card was visible in the glasses.*
+- **Display works.** An app-owned `UIWindow` attached on
+  `UIScene.willConnectNotification` draws on the glasses at 1920×1080, 60 Hz max.
+  Modes iPadOS lists include 1920×1200 and 2560×1440; 120 Hz was not offered.
+- **USB sensor is not readable by an app.** `IOServiceOpen` on
+  `IOUSBHostDevice "Rokid Max"`, on each of its five interfaces and on the
+  legacy `IOUSBDevice` all return `0xe00002e2` (not permitted, sandbox).
+  `IOUSBHost.framework` does not exist on iPadOS 27. `IOHIDManagerOpen` is
+  refused too. Only the registry names are visible.
+- No head-tracking earphones available to the owner, so that path is untested.
+- Conclusion: with a sideloaded, free-account app there is no head-motion
+  source on the iPad, so no standalone 3DOF host. The remaining Apple-sanctioned
+  route is a DriverKit USB driver (paid developer programme, an entitlement
+  Apple must grant for the vendor id, built with Xcode on a Mac) — not tried.
+
+## 2026-11-14 — Bose Noise Cancelling Headphones 700 as a head tracker (iPad, Bluetooth LE)
+*Measured by the in-app check; raw bytes in the report sent from the device.*
+- Advertises as `LE-Bose NC 700 HP` with services FDD2 (Bose AR), FE26, FE03;
+  connects without pairing prompts while also being the audio device.
+- FDD2 characteristics present: device info 7B61AD83, sensor info 855CB3E7,
+  sensor config 5AF38AF6, sensor data 56A72AB8, gesture info/config/data, and
+  one more (B30910E9, not in the community description).
+- Sensors offered: 0 accelerometer, 1 gyroscope, 2 rotation, 3 game rotation;
+  each at 320/160/80/40/20 ms. Writing config `… 03 00 14` (game rotation,
+  20 ms, big-endian) is accepted and gives **49 Hz**.
+- Data records are `id u8, timestamp u16 BE (ms), x y z w i16 BE / 16384`,
+  **packed 3 to 6 per notification** (so packets arrive every 60–120 ms; the
+  sensor clock, not arrival time, must time the samples).
+- The first few samples after enabling start near identity and then jump to
+  the gravity-referenced value; recentre after that.
+- Axes, from three marked poses (straight, head left ≈57°, up ≈36°): sensor
+  world **Z up**; body **X right, Y backward, Z down** (the headband sat
+  ≈15–20° off level, which the recentre removes). Encoded as
+  `SensorFrame::bose_ar()` and checked against the recorded marks in tests.
+
+## 2026-11-14 — iPad host, first on-device run (owner's report)
+- Web window on the glasses: appears, undistorted, text and video clear;
+  YouTube plays. Turning the head moves the window the opposite way: fixed in
+  the room. No lag noticed with the Bose tracker at 49 Hz and 20 ms base
+  prediction (subjective, seated).
+- Scripted click, scroll and typing work; some clicks "not natural" (single
+  click works). The page reported fullscreen as unsupported (before the shim).
+- Second run, same day (owner's report): address bar, bookmarks and pages
+  fine; sign-in through "on iPad" works; a gamepad test page sees both the
+  on-screen Perch controller and a Bluetooth controller. xbox.com/play and
+  play.geforcenow.com both stop at "add this page to the Home Screen".
+- Genuine touch synthesis works on iPadOS 27.0.1 on the external (non-interactive)
+  display: `UITouch` private setters + `_touchesEvent` + IOHIDEvent, sent with
+  `UIApplication.sendEvent`; hit-testing through the perspective layer transform
+  finds the web view; WebKit acts on the taps (device log, 2026-11-14).
+

@@ -24,6 +24,16 @@ jobs:
         run: cargo check -p perch-ffi --features rokid
       - name: test compositor & capture (link only; no GPU needed for unit tests)
         run: cargo test -p perch-compositor -p perch-capture
+  # iPad: the pure-Swift core (wire bytes, gestures, state parsing) is tested
+  # on Linux; the SwiftUI app itself needs the iOS SDK and is built locally
+  # with xtool. Like Android, this job must never block a Linux release.
+  ipad-core:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: swift test (PerchCore)
+        working-directory: apps/ipad
+        run: PERCH_CORE_ONLY=1 swift test
   # Android is staged (see docs/ROADMAP.md); this job must never block a
   # Linux release. The ubuntu-24.04 image ships an Android SDK at
   # $ANDROID_HOME, so no setup action is needed (android-actions/setup-android

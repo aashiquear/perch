@@ -24,6 +24,8 @@
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
+pub mod external;
+
 use nalgebra::{UnitQuaternion, Vector3};
 use perch_proto::{CalibrationState, Pose};
 use serde::{Deserialize, Serialize};

@@ -1,0 +1,34 @@
+<!doctype html><html><body style="margin:0">
+<button id="svgbtn" style="position:absolute;left:0;top:0;width:100px;height:100px"><svg width="100" height="100"><path d="M0 0H100V100H0Z"/></svg></button>
+<div id="touchonly" style="position:absolute;left:100px;top:0;width:100px;height:100px;background:#ccc"></div>
+<a id="link" href="#went" style="position:absolute;left:200px;top:0;width:100px;height:100px;display:block">link</a>
+<div id="host" style="position:absolute;left:300px;top:0;width:100px;height:100px"></div>
+<input id="box" type="checkbox" style="position:absolute;left:400px;top:0;width:100px;height:100px;margin:0">
+<div id="fs" style="position:absolute;left:0;top:200px;width:50px;height:50px">fs</div>
+<pre id="out"></pre>
+<script>var R={}; window.webkit={messageHandlers:{perch:{postMessage:function(m){(R.log=R.log||[]).push(m)}}}};</script>
+<script>/*inputShim*/</script><script>/*standaloneShim*/</script><script>/*fullscreenShim*/</script><script>/*gamepadShim*/</script>
+<script>
+var AF=Object.getPrototypeOf(async function(){}).constructor;
+var click=new AF("x","y","%click%"), scroll=new AF("x","y","dx","dy","%scroll%"), pad=new AF("a","b","%gamepad%");
+(async function(){
+ try{
+  svgbtn.addEventListener("click",function(e){R.svgClick=(R.svgClick||0)+1});
+  touchonly.addEventListener("touchend",function(e){R.touchend=(R.touchend||0)+1; e.preventDefault()});
+  touchonly.addEventListener("click",function(){R.clickAfterPrevented=true});
+  var sr=host.attachShadow({mode:"open"}); sr.innerHTML='<button id="in" style="width:100px;height:100px">x</button>';
+  sr.getElementById("in").addEventListener("click",function(){R.shadowClick=true});
+  R.t1=await click(50,50); R.t2=await click(150,50); R.t3=await click(250,50); R.t4=await click(350,50); R.t5=await click(450,50);
+  R.hash=location.hash; R.checked=box.checked;
+  R.standalone=navigator.standalone; R.mm=matchMedia("(display-mode: standalone)").matches; R.mmOther=matchMedia("(min-width: 99999px)").matches;
+  var ev=[]; document.addEventListener("fullscreenchange",function(){ev.push(document.fullscreenElement?document.fullscreenElement.id:null)});
+  R.fsEnabled=document.fullscreenEnabled; var pr=fs.requestFullscreen(); R.fsSyncEvents=ev.length; await pr; await new Promise(function(r){setTimeout(r,30)});
+  R.fsFills=[fs.getBoundingClientRect().width===innerWidth, fs.getBoundingClientRect().height===innerHeight]; R.fsEl=document.fullscreenElement&&document.fullscreenElement.id;
+  await document.exitFullscreen(); await new Promise(function(r){setTimeout(r,30)}); R.fsEvents=ev; R.fsAfter=fs.getBoundingClientRect().width;
+  var conn=0; addEventListener("gamepadconnected",function(){conn++});
+  await pad([0.5,0,0,-1],[1,0,0,0,0,0,0,0.7,0,0,0,0,0,0,0,0,0]);
+  var g=navigator.getGamepads()[0]; R.pad=[conn,g.mapping,g.axes[0],g.buttons[0].pressed,g.buttons[7].value,g.buttons.length];
+ }catch(e){R.exception=String(e&&e.stack||e)}
+ out.textContent="RESULT"+JSON.stringify(R)+"END";
+})();
+</script></body></html>

@@ -2,8 +2,8 @@ import Foundation
 
 /// Minimal postcard encoder for `perch_proto::StreamPacket`.
 /// Byte-exact against `wire_format_tests` in crates/perch-proto/src/lib.rs.
-enum Postcard {
-    enum Event {
+public enum Postcard {
+    public enum Event: Equatable {
         case mouseMove(dx: Float, dy: Float)
         case mouseButton(button: Int, down: Bool)
         case scroll(dx: Float, dy: Float)
@@ -13,16 +13,16 @@ enum Postcard {
         case gamepad(axes: [Float], buttons: UInt16)
     }
 
-    static let btnLeft = 0, btnRight = 1, btnMiddle = 2, btnBack = 3, btnForward = 4
+    public static let btnLeft = 0, btnRight = 1, btnMiddle = 2, btnBack = 3, btnForward = 4
 
-    static func ping(_ nonce: UInt32) -> Data {
+    public static func ping(_ nonce: UInt32) -> Data {
         var d = Data()
         varint(&d, 2)
         varint(&d, nonce)
         return d
     }
 
-    static func input(_ events: [Event]) -> Data {
+    public static func input(_ events: [Event]) -> Data {
         var d = Data()
         varint(&d, 1)
         varint(&d, UInt32(events.count))

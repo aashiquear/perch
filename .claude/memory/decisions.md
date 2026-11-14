@@ -51,3 +51,50 @@
 - 2026-11-01 Android multi-app windows use Shizuku (shell uid) trusted virtual displays, the scrcpy --new-display mechanism, because a normal app may only launch its own activities on a virtual display it creates and PUBLIC displays need CAPTURE_VIDEO_OUTPUT. DeX is deliberately not used (Samsung composites DeX itself; no 3DOF).
 - 2026-11-02 Decision: gyro bias is refined continuously whenever the glasses are still (auto_bias on by default) instead of relying only on the explicit table calibration; the explicit run is still the fast way to a good starting point and sets Ready state.
 - 2026-11-03 Decision: never rearrange GNOME's monitor layout; hop count comes from the live column positions. Around every virtual-display add/remove the glasses window leaves fullscreen (GNOME 50 relocates+focuses fullscreen windows on secondary monitors on hot-plug).
+- 2026-11-13 **iPad app = SwiftPM + xtool, pure-Swift core, no perch-ffi.** Built
+  and signed on Linux (xtool 1.24, Xcode 27.2 SDK, free Apple ID → 7-day
+  signature, bundle id becomes `XTL-<team>.io.perch.ipad`). The controller needs
+  no tracking/space maths, so linking the Rust staticlib was not worth the
+  cross-link setup; what logic there is (wire bytes, gestures, controller
+  state, state parsing) sits in `PerchCore` with tests that run on the host.
+  Revisit perch-ffi if the iPad ever draws a projected layout.
+- 2026-11-13 **iPad "same as Android" means the panel and pop-up, not host mode.**
+  Panel actions map to host commands (`move_to_glasses`, `set_window_span`,
+  `set_grid` distance, `remove_window`, `close_app_window`). Two-finger tap is
+  a right click on iPad (Android's remote sends Escape); the Esc button stays.
+- 2026-11-13 **`calibration` events are flattened**: `{"event":"calibration",
+  "calibrating":{"percent":n}}`, `{"ready":null}`; ~100 per run, so clients read
+  them in place rather than asking for `state` each time.
+- 2026-11-14 **iPad host mode: measured, blocked on the IMU.** The 2026-10-31
+  "controller-only" decision is now backed by an on-device probe (hardware-log,
+  same date): display yes, USB sensor refused by the sandbox on every route.
+  Do not build an iPad renderer until a motion source exists (DriverKit driver,
+  or head-tracking earphones). The probe stays in the app's Glasses tab so the
+  result can be re-checked on a new iPadOS.
+- 2026-11-14 **iPad host exists after all, with a headset as the IMU.** The
+  Bose NC 700's game-rotation vector (BLE, 49 Hz) replaces the glasses' USB
+  sensor. Orientation-in sources go through `perch_tracking::external`
+  (`ExternalTracker`: frame conversion, mount-tilt removal at recentre,
+  prediction on the sensor's clock), not through `Tracker`, which fuses raw
+  gyro/accel. AirPods would be a second `SensorFrame`.
+- 2026-11-14 **iPad windows are live `WKWebView`s warped by `CATransform3D`.**
+  The Rust homography goes straight onto the view's layer: no capture, no
+  Metal, video plays natively. iPadOS cannot show other apps, so content is
+  web pages and local files. Pointer and keys are performed by script at the
+  cursor (no public API injects touches into another window).
+- 2026-11-14 **The iPad app now links perch-ffi** (static library for
+  `aarch64-apple-ios`, header via the `CPerch` SwiftPM target, absolute `-L`
+  because xtool builds from a wrapper package). Supersedes the 2026-11-13
+  "no perch-ffi" note for the host tab; the remote tab still needs none.
+- 2026-11-14 **iPad sign-in = move the live web view to the iPad screen.** No
+  app can read Chrome's or Safari's sessions. The "on iPad" sheet re-parents
+  the window's `WKWebView` to the iPad, where system password AutoFill works
+  (iCloud Keychain, or Chrome if chosen under Settings → Passwords); cookies
+  live in the shared default data store, so one sign-in serves all windows
+  and launches. Passkeys are not available to a non-browser app's web view.
+- 2026-11-14 **Pages get input through shims, not synthetic touches.**
+  Fullscreen = the element fills the window (Fullscreen API replaced at
+  document start); controllers = a virtual standard gamepad behind
+  `navigator.getGamepads()`, fed by the on-screen skins and by paired
+  controllers read with GameController.
+

@@ -105,10 +105,21 @@ then `./gradlew assembleDebug` (runs `cargo ndk` for `perch-ffi --features rokid
 
 ## iPadOS / iOS
 
-Controller only. `NWBrowser` for Bonjour, `URLSessionWebSocketTask` for
-control, `NWConnection` UDP for input. Attach a keyboard to the iPad and it
-forwards typing; the Pencil's hover moves the pointer. Build with XcodeGen
-(`apps/ipad/project.yml`).
+Two tabs, as on Android. **Laptop remote**: the Android panel and
+pop-up (touchpad, keyboard, controller skins) aimed at a host on the network:
+`NWBrowser` for Bonjour, `URLSessionWebSocketTask` for control,
+`NWConnection` UDP for input. A keyboard, trackpad or mouse attached to the
+iPad is forwarded (`UIKey.keyCode` is already a HID usage; ⌘ → Ctrl by
+default). Built on Linux with xtool, no Mac needed: `apps/ipad/README.md`.
+
+Measured on an M2 iPad, iPadOS 27.0.1 (2026-11-14, `.claude/memory/hardware-log.md`):
+an app can draw on the glasses (1920×1080, 60 Hz), but every way of opening
+the Rokid USB sensor is refused by the sandbox. Host mode therefore takes
+head motion from Bose AR headphones (NC 700: game-rotation vector over
+Bluetooth LE, 49 Hz) through `perch_tracking::external`, and its windows are
+web pages and local files the app renders itself (iPadOS cannot show other
+apps). Tracking is coarser than the glasses' 1 kHz IMU. Details and the
+repeatable check: `apps/ipad/README.md`, Glasses tab → Check.
 
 ## Windows / macOS (M4)
 

@@ -45,6 +45,16 @@ hw-check:
 android:
     cd apps/android && ./gradlew assembleDebug
 
+# iPad: build, sign and install on the iPad on USB (needs xtool; see apps/ipad/README.md)
+ipad:
+    cargo rustc -p perch-ffi --release --target aarch64-apple-ios --crate-type staticlib
+    cd apps/ipad && xtool dev build --ipa && xtool install xtool/Perch.ipa
+
+# iPad: pure-Swift core tests on this machine
+ipad-test:
+    cd apps/ipad && PERCH_CORE_ONLY=1 swift test
+    cd apps/ipad && Tests/PageScripts/run.sh
+
 # Regenerate perch_ffi.h with cbindgen and diff against the checked-in header
 header:
     scripts/gen-header.sh

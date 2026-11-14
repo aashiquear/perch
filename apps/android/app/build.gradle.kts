@@ -15,8 +15,8 @@ android {
         applicationId = "io.perch.android"
         minSdk = 29            // MediaProjection + Presentation + USB host stable from here
         targetSdk = 35
-        versionCode = 1
-        versionName = "0.1.0"
+        versionCode = 92
+        versionName = "0.9.2"
         ndk { abiFilters += listOf("arm64-v8a") }   // S24 Ultra; add x86_64 for emulator
         externalNativeBuild { cmake { arguments += "-DANDROID_STL=c++_shared" } }
     }

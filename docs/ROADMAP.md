@@ -79,7 +79,12 @@ whatever is focused.
 - [ ] macOS: ScreenCaptureKit, CGEvent, notarised app bundle.
 - [ ] Android: Shizuku `INJECT_EVENTS` backend; DeX app-per-window via
       `setLaunchDisplayId`; settings screen (FOV, IPD, sensitivity).
-- [ ] iPad: keyboard shortcut forwarding (⌘ → ctrl mapping), layout map view.
+- [x] iPad: Android-style panel and pop-up (touchpad, keyboard, gamepad skins), keyboard
+      shortcut forwarding (⌘ → ctrl mapping), layout map view; built with xtool on Linux.
+- [x] iPad host: glasses on the iPad, head tracking from Bose AR headphones, web/file windows,
+      genuine taps, gamepad, bookmarks, sign-in on the iPad screen (v0.9.2).
+- [ ] iPad: AirPods as a second head-motion source, drag gestures, pointer lock for an attached
+      mouse, on-device tuning (pointer gain, prediction).
 
 ## M5 — Polish & trust
 - [ ] Transport security (Noise/TLS + QR pairing), replacing the `#token` hack.

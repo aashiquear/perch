@@ -1,0 +1,5 @@
+.build/
+xtool/
+*.xcodeproj
+*.ipa
+.bsp/

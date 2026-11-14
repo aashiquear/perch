@@ -1,0 +1,4 @@
+version: 1
+bundleID: io.perch.ipad
+infoPath: Info.plist
+iconPath: AppIcon.png

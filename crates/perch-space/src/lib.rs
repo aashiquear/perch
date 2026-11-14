@@ -83,6 +83,11 @@ impl DisplayOptics {
     pub fn focal_px(&self) -> f32 {
         (self.width_px as f32 / 2.0) / (self.fov_h / 2.0).tan()
     }
+    /// Width in metres of a window that exactly spans the panel when it
+    /// hangs straight ahead at `distance`.
+    pub fn width_at(&self, distance: f32) -> f32 {
+        2.0 * distance * (self.fov_h / 2.0).tan()
+    }
     /// Vertical FOV implied by the aspect ratio.
     pub fn fov_v(&self) -> f32 {
         2.0 * ((self.height_px as f32 / 2.0) / self.focal_px()).atan()
@@ -242,6 +247,27 @@ impl Projector {
         let f = y0;
         Matrix3::new(a, b, c, d, e, f, g, h, 1.0)
     }
+}
+
+/// Yaw of each window centre for windows of `widths_m` hung side by side at
+/// `distance`, left to right in the order given, `gap_m` apart, the row
+/// centred on yaw 0. Radians, + = left. Used by hosts without the slot grid
+/// (the phone and tablet apps).
+pub fn row_yaws(widths_m: &[f32], distance: f32, gap_m: f32) -> Vec<f32> {
+    let d = distance.max(0.1);
+    // Angle each window and gap subtends, as arcs on the viewing sphere.
+    let spans: Vec<f32> = widths_m.iter().map(|w| 2.0 * (w.max(0.0) / (2.0 * d)).atan()).collect();
+    let gap = 2.0 * (gap_m.max(0.0) / (2.0 * d)).atan();
+    let total: f32 = spans.iter().sum::<f32>() + gap * spans.len().saturating_sub(1) as f32;
+    let mut left_edge = total / 2.0; // + is left
+    spans
+        .iter()
+        .map(|s| {
+            let centre = left_edge - s / 2.0;
+            left_edge -= s + gap;
+            centre
+        })
+        .collect()
 }
 
 /// Point-in-convex-quad test (any winding).
@@ -960,6 +986,56 @@ fn place(yaw: f32, pitch: f32, distance: f32, width_m: f32, height_m: f32) -> Pl
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn a_window_of_width_at_fills_the_panel() {
+        // No display tilt: the window is centred on the optical axis.
+        let optics = DisplayOptics {
+            tilt: 0.0,
+            ..DisplayOptics::rokid_max_1080p()
+        };
+        let width = optics.width_at(2.0);
+        let w = SpatialWindow {
+            id: Uuid::new_v4(),
+            source: Source::Virtual {
+                peer: Uuid::nil(),
+                width: 1920,
+                height: 1080,
+            },
+            placement: Placement {
+                yaw: 0.0,
+                pitch: 0.0,
+                distance: 2.0,
+                roll: 0.0,
+                width_m: width,
+                height_m: width * 9.0 / 16.0,
+            },
+            anchor: Anchor::Head,
+            z: 0,
+            opacity: 1.0,
+            visible: true,
+            focused: false,
+        };
+        let q = Projector::new(optics).project(&w, &Pose::identity()).unwrap();
+        assert!(
+            q.corners[0].x.abs() < 1.0 && (q.corners[1].x - 1920.0).abs() < 1.0,
+            "{:?}",
+            q.corners
+        );
+    }
+
+    #[test]
+    fn row_is_centred_ordered_left_to_right_and_does_not_overlap() {
+        assert_eq!(row_yaws(&[], 2.0, 0.1), Vec::<f32>::new());
+        assert_eq!(row_yaws(&[1.6], 2.0, 0.1), vec![0.0]);
+        let y = row_yaws(&[1.0, 1.6, 1.0], 2.0, 0.1);
+        assert!(y[0] > y[1] && y[1] > y[2], "left is +yaw: {y:?}");
+        assert!(y[1].abs() < 1e-6 && (y[0] + y[2]).abs() < 1e-6, "symmetric: {y:?}");
+        // Neighbouring edges leave at least the gap between them.
+        let half = |w: f32| (w / 4.0f32).atan();
+        assert!((y[0] - half(1.0)) - (y[1] + half(1.6)) > 0.04);
+    }
+
     use super::*;
 
     fn win(yaw: f32, pitch: f32) -> SpatialWindow {

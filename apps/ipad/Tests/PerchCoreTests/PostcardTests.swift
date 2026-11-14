@@ -1,5 +1,5 @@
 import XCTest
-@testable import Perch
+@testable import PerchCore
 
 /// Mirrors `wire_format_tests` in crates/perch-proto.
 final class PostcardTests: XCTestCase {

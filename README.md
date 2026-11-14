@@ -51,10 +51,11 @@ shells around them.
 
 | | |
 |---|---|
-| Linux host on GNOME | **v0.1.0 released**: virtual monitors per window, input switching, on-glasses bar, dashboard, audio, presets |
+| Linux host on GNOME | **released** (current: v0.9.2): virtual monitors per window, input switching, on-glasses bar, dashboard, audio, presets |
 | Android host (Samsung S24 Ultra, Android 16) | **working**: 3DOF, multi-app windows, touchpad, keyboard, mouse, Bluetooth input, virtual gamepad verified in Chrome and GeForce NOW |
 | Tracking | 444 Hz IMU, 0.08°/min drift after calibration, online bias learning while still |
-| iPad remote | written, not yet built |
+| iPad host (M2, iPadOS 27) | **working**: glasses on the iPad's USB-C, head tracking from Bose NC 700 headphones (49 Hz), web and file windows with address bar and bookmarks, touchpad with genuine taps, keyboard, virtual and Bluetooth gamepad; Xbox Cloud, GeForce NOW and YouTube verified. Built and installed from Linux with xtool (no release artefact: it must be signed with your own Apple ID) |
+| iPad laptop remote | **working**: panel, touchpad, keyboard, gamepad skins for a `perchd` host |
 | Windows / macOS hosts | shared core ready; backends not started |
 
 Scenarios with step-by-step recipes: [docs/USE-CASES.md](docs/USE-CASES.md).
@@ -189,7 +190,7 @@ crates/
   perch-cli          perch
   perch-ffi          C ABI for Android/iOS
 apps/android         Kotlin/Compose host + touchpad app
-apps/ipad            SwiftUI touchpad app (XcodeGen spec)
+apps/ipad            SwiftUI remote: panel + touchpad + gamepad (SwiftPM, built with xtool)
 docs/                architecture, protocol, device notes, platforms, roadmap, ADRs
 udev/                Linux device permissions
 tools/fixtures       IMU recordings for replay tests

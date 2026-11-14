@@ -2433,7 +2433,7 @@ checksum = "9b4f627cb1b25917193a259e49bdad08f671f8d9708acfd5fe0a8c1455d87220"
 
 [[package]]
 name = "perch-capture"
-version = "0.1.0"
+version = "0.9.2"
 dependencies = [
  "ashpd",
  "futures-util",
@@ -2449,7 +2449,7 @@ dependencies = [
 
 [[package]]
 name = "perch-cli"
-version = "0.1.0"
+version = "0.9.2"
 dependencies = [
  "anyhow",
  "clap",
@@ -2466,7 +2466,7 @@ dependencies = [
 
 [[package]]
 name = "perch-compositor"
-version = "0.1.0"
+version = "0.9.2"
 dependencies = [
  "bytemuck",
  "nalgebra 0.33.3",
@@ -2483,7 +2483,7 @@ dependencies = [
 
 [[package]]
 name = "perch-daemon"
-version = "0.1.0"
+version = "0.9.2"
 dependencies = [
  "anyhow",
  "chrono",
@@ -2517,7 +2517,7 @@ dependencies = [
 
 [[package]]
 name = "perch-ffi"
-version = "0.1.0"
+version = "0.9.2"
 dependencies = [
  "nalgebra 0.33.3",
  "perch-hal",
@@ -2530,7 +2530,7 @@ dependencies = [
 
 [[package]]
 name = "perch-hal"
-version = "0.1.0"
+version = "0.9.2"
 dependencies = [
  "ar-drivers",
  "nalgebra 0.33.3",
@@ -2545,7 +2545,7 @@ dependencies = [
 
 [[package]]
 name = "perch-input"
-version = "0.1.0"
+version = "0.9.2"
 dependencies = [
  "evdev",
  "nalgebra 0.33.3",
@@ -2559,7 +2559,7 @@ dependencies = [
 
 [[package]]
 name = "perch-net"
-version = "0.1.0"
+version = "0.9.2"
 dependencies = [
  "anyhow",
  "futures-util",
@@ -2575,7 +2575,7 @@ dependencies = [
 
 [[package]]
 name = "perch-proto"
-version = "0.1.0"
+version = "0.9.2"
 dependencies = [
  "nalgebra 0.33.3",
  "postcard",
@@ -2587,7 +2587,7 @@ dependencies = [
 
 [[package]]
 name = "perch-space"
-version = "0.1.0"
+version = "0.9.2"
 dependencies = [
  "nalgebra 0.33.3",
  "perch-proto",
@@ -2599,7 +2599,7 @@ dependencies = [
 
 [[package]]
 name = "perch-tracking"
-version = "0.1.0"
+version = "0.9.2"
 dependencies = [
  "nalgebra 0.33.3",
  "perch-proto",
@@ -2610,7 +2610,7 @@ dependencies = [
 
 [[package]]
 name = "perch-ui"
-version = "0.1.0"
+version = "0.9.2"
 
 [[package]]
 name = "pin-project"

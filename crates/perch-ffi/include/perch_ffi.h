@@ -13,6 +13,7 @@ extern "C" {
 typedef struct PerchTracker PerchTracker;
 typedef struct PerchSpace PerchSpace;
 typedef struct PerchGlasses PerchGlasses;
+typedef struct PerchExtTracker PerchExtTracker;
 
 /* ---- tracker ---------------------------------------------------------- */
 PerchTracker *perch_tracker_new(uint64_t display_delay_us, const char *calibration_json);
@@ -26,6 +27,16 @@ void perch_tracker_calibrate(PerchTracker *t, float seconds);
 int  perch_tracker_calibration_state(const PerchTracker *t);
 int  perch_tracker_calibration_json(const PerchTracker *t, char *buf, size_t cap);
 
+/* ---- external orientation source (headset with its own fusion) -------- */
+/* frame: 0 = source already RUB, 1 = Bose AR headset */
+PerchExtTracker *perch_ext_tracker_new(int frame, uint64_t display_delay_us);
+void perch_ext_tracker_free(PerchExtTracker *t);
+/* ticks_ms: sensor's wrapping ms clock; host_s: packet arrival, seconds; q = x,y,z,w */
+int  perch_ext_tracker_feed(PerchExtTracker *t, uint16_t ticks_ms, double host_s, const float *q_xyzw);
+/* pose for a frame shown at host_s; out8 as perch_tracker_predict; -1 before the first sample */
+int  perch_ext_tracker_pose(const PerchExtTracker *t, double host_s, float *out8);
+void perch_ext_tracker_recenter(PerchExtTracker *t);
+
 /* ---- space ------------------------------------------------------------ */
 PerchSpace *perch_space_new(uint32_t width_px, uint32_t height_px, float fov_h_rad, float tilt_rad);
 void perch_space_free(PerchSpace *s);
@@ -37,6 +48,10 @@ int  perch_space_pin_here(PerchSpace *s, int index);
 int  perch_space_count(const PerchSpace *s);
 /* out8 = TL,TR,BR,BL (x,y) in panel px; h9 = row-major 3x3 homography (may be NULL). 1 on screen, 0 off, -1 behind. */
 int  perch_space_project(PerchSpace *s, int index, float dt, float *out8, float *h9);
+/* width (m) of a window that exactly spans the panel at `distance` */
+float perch_space_fill_width(const PerchSpace *s, float distance);
+/* all windows side by side, index order left to right, centred on yaw 0 */
+int  perch_space_arrange_row(PerchSpace *s, float distance, float gap_m, float pitch);
 int  perch_space_json(const PerchSpace *s, char *buf, size_t cap);
 /* out5 = yaw, pitch, distance, width_m, height_m of window `index`; 0 or -1. */
 int  perch_space_placement(const PerchSpace *s, int index, float *out5);
