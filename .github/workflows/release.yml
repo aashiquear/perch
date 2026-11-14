@@ -2,10 +2,20 @@ name: release
 on:
   push:
     tags: ["v*"]
+  # Manual run: builds the iPad IPA only. With `tag`, the sources of that tag
+  # are built and the IPA is attached to its existing release; without, the
+  # IPA is kept as a run artifact (to try the job).
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to build the iPad IPA for and attach it to (empty: build the chosen branch, artifact only)"
+        required: false
+        default: ""
 permissions:
   contents: write
 jobs:
   linux-x86_64:
+    if: github.event_name == 'push'
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
@@ -36,6 +46,7 @@ jobs:
           generate_release_notes: true
 
   android:
+    if: github.event_name == 'push'
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
@@ -65,3 +76,57 @@ jobs:
           files: |
             perch-*-android-debug.apk
             perch-*-android-debug.apk.sha256
+
+  # iPad: an *unsigned* IPA. Apple only runs apps signed for the owner's own
+  # account, so the release cannot carry a signed one; `xtool install <ipa>`
+  # (Linux, Windows, macOS), AltStore or Sideloadly sign it with your Apple ID
+  # as they install. Built with the same tool as locally (xtool, SwiftPM), on
+  # a Mac runner because the iOS SDK may not be redistributed to Linux CI.
+  ipad:
+    runs-on: macos-15
+    env:
+      VERSION: ${{ inputs.tag || github.ref_name }}
+      XTOOL_VERSION: "1.24.0"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+      - uses: dtolnay/rust-toolchain@stable
+        with: { targets: aarch64-apple-ios }
+      - uses: Swatinem/rust-cache@v2
+      - name: Rust core for iOS (static library)
+        run: cargo rustc -p perch-ffi --release --target aarch64-apple-ios --crate-type staticlib
+      - name: xtool
+        run: |
+          curl -fsSL -o xtool.app.zip "https://github.com/xtool-org/xtool/releases/download/${XTOOL_VERSION}/xtool.app.zip"
+          unzip -q xtool.app.zip -d "$RUNNER_TEMP/xtool"
+          bin="$(find "$RUNNER_TEMP/xtool" -type f -name xtool -perm +111 | head -1)"
+          test -n "$bin" || { echo "no xtool binary in the archive"; find "$RUNNER_TEMP/xtool" | head -50; exit 1; }
+          echo "XTOOL=$bin" >> "$GITHUB_ENV"
+          "$bin" --version
+          xcodebuild -version
+      - name: core tests
+        working-directory: apps/ipad
+        run: PERCH_CORE_ONLY=1 swift test
+      - name: build the app (unsigned)
+        working-directory: apps/ipad
+        run: |
+          "$XTOOL" dev build --ipa --configuration release
+          cp xtool/Perch.ipa "$GITHUB_WORKSPACE/perch-${VERSION}-ipad-unsigned.ipa"
+          cd "$GITHUB_WORKSPACE"
+          shasum -a 256 "perch-${VERSION}-ipad-unsigned.ipa" > "perch-${VERSION}-ipad-unsigned.ipa.sha256"
+          unzip -l "perch-${VERSION}-ipad-unsigned.ipa"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: perch-ipad-unsigned
+          path: |
+            perch-*-ipad-unsigned.ipa
+            perch-*-ipad-unsigned.ipa.sha256
+      - uses: softprops/action-gh-release@v2
+        if: github.event_name == 'push' || inputs.tag != ''
+        with:
+          tag_name: ${{ inputs.tag || github.ref_name }}
+          files: |
+            perch-*-ipad-unsigned.ipa
+            perch-*-ipad-unsigned.ipa.sha256
+
