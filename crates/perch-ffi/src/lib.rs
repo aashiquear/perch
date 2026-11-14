@@ -1,8 +1,9 @@
 //! `perch-ffi` — a small, stable C ABI so non-Rust hosts reuse the same
 //! tracking and spatial code. The Android host app calls this through JNI
-//! (`apps/android/.../PerchNative.kt`); the iPad app could use it for local
-//! preview, but iPadOS can't read the glasses IMU over USB, so the iPad app
-//! is a pure network controller and does not link this today.
+//! (`apps/android/.../PerchNative.kt`); the iPad host links it as a static
+//! library (`apps/ipad`, the `CPerch` target) and feeds the tracker with a
+//! headset's orientation (`perch_ext_tracker_*`), because iPadOS does not let
+//! an app read the glasses' IMU over USB.
 //!
 //! Conventions: every object is an opaque pointer created by `*_new` and
 //! destroyed by `*_free`; functions return `0` on success / `-1` on error;

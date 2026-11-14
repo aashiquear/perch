@@ -3,7 +3,7 @@ name = "perch-ffi"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "C ABI over perch-tracking / perch-space / perch-hal for the Android host app (JNI) and the iPad controller (Swift)"
+description = "C ABI over perch-tracking / perch-space / perch-hal for the Android host app (JNI) and the iPad host app (Swift)"
 
 [lib]
 name = "perch_ffi"

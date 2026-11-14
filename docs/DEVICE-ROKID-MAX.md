@@ -18,6 +18,12 @@ XRLinuxDriver wiki. Treat it as "very likely" until `just hw-check` confirms.
   `RokidAir::new(fd)` (`ar-drivers` calls `libusb_set_option(NO_DEVICE_DISCOVERY)`
   then `libusb_wrap_sys_device`). Keep the `UsbDeviceConnection` alive.
 
+- iPadOS: the device is visible in the IORegistry (`IOUSBHostDevice "Rokid
+  Max"`, five interfaces) but every open is refused by the app sandbox
+  (`0xe00002e2`), ids are hidden, and the panel is offered at 60 Hz, not 120
+  *(measured by us, M2 iPad, iPadOS 27.0.1)*. The iPad host uses a headset
+  for head motion instead: `docs/DEVICE-BOSE-AR.md`.
+
 ### Report types
 
 | byte 0 | meaning | notes |

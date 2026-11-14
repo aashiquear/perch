@@ -4,11 +4,13 @@
 
 | Level | How | Where |
 |---|---|---|
-| Unit (pure Rust) | `cargo test` | every crate; 51 tests today |
+| Unit (pure Rust) | `cargo test` | every crate, including the headset tracker (`perch-tracking::external`) against poses recorded from a real headset |
 | Wire-format parity | byte-exact tests in Rust, Kotlin, Swift | `perch-proto` `wire_format_tests`, `PostcardTest.kt`, `PostcardTests.swift` |
+| iPad core (pure Swift) | `just ipad-test` (`PERCH_CORE_ONLY=1 swift test`) | `apps/ipad/Tests/PerchCoreTests`: wire bytes, gestures, controller state, headset bytes, addresses, bookmarks; runs on Linux and in CI |
+| iPad page scripts | `apps/ipad/Tests/PageScripts/run.sh` (headless Chrome); `wk.py <url> <steps.json>` loads a live site in WebKitGTK with the same scripts | taps, fullscreen, gamepad and Home-Screen shims injected into pages |
 | Integration, no hardware | `perchd --mock synthetic` + `perch` CLI | `/mock` slash command |
 | Replay | `perchd --mock tools/fixtures/<name>.jsonl` | fixtures recorded with `perch record` |
-| Hardware | `/hw-check` | results logged in `.claude/memory/hardware-log.md` |
+| Hardware | `/hw-check`; on the iPad, Glasses → Check sends a report to `nc -l -p 7430` on the laptop | results logged in `.claude/memory/hardware-log.md` |
 | Feature matrix | `just ci` | mirrors `.github/workflows/ci.yml` |
 
 ## Recording fixtures

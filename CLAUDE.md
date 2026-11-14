@@ -13,7 +13,9 @@ The glasses are a dumb 1080p/120 Hz monitor with a 1 kHz IMU on USB. `perchd`
 glasses panel, and routes one keyboard+mouse to whichever peer (laptop, phone,
 tablet) owns the focused window. Phones/iPads run a touchpad/controller app.
 The Android app can also be the host itself (USB-C to glasses, phone screen or
-DeX as windows). Same Rust core everywhere via `perch-ffi`.
+DeX as windows), and so can the iPad app (web/file windows; head motion from
+Bose AR headphones, because iPadOS closes the glasses' USB sensor to apps).
+Same Rust core everywhere via `perch-ffi`.
 
 ## Golden rules
 
@@ -52,6 +54,8 @@ cargo run -p perch-daemon -- --mock synthetic --config-dir ./dev
 cargo run -p perch-cli -- status
 just ci                                     # exactly what GitHub Actions runs
 just hw-check                               # with glasses plugged in
+just ipad                                   # iPad: Rust core for iOS, xtool build, install (iPad on USB)
+just ipad-test                              # iPad: Swift core tests + page-script tests
 ```
 
 Slash commands in `.claude/commands/`: `/test`, `/mock`, `/hw-check`,
@@ -69,7 +73,8 @@ Slash commands in `.claude/commands/`: `/test`, `/mock`, `/hw-check`,
 | change rendering | `crates/perch-compositor` (`shader.wgsl`, `quad_to_vertices`) |
 | daemon wiring | `crates/perch-daemon/src/{device,engine,server,render}.rs` |
 | Android | `apps/android/app/src/main/java/io/perch/android/{host,touchpad,input}` |
-| iPad | `apps/ipad/Perch/{Net,Touchpad,App}` |
+| iPad | `apps/ipad/Sources/{PerchCore,Perch/{Host,UI,Net,Touchpad,App}}`, `apps/ipad/README.md` |
+| headset as head tracker | `crates/perch-tracking/src/external.rs`, `docs/DEVICE-BOSE-AR.md` |
 | what's next | `docs/ROADMAP.md` |
 | why we did X | `docs/adr/*.md`, `.claude/memory/decisions.md` |
 
@@ -83,6 +88,10 @@ Slash commands in `.claude/commands/`: `/test`, `/mock`, `/hw-check`,
   `perch-tracking`). Extend, don't delete.
 - A projection change needs: window-ahead-is-centred, turning-left-moves-right,
   homography-maps-corners (already in `perch-space`).
+- iPad logic lives in `PerchCore` (pure Swift, `just ipad-test`, runs on Linux)
+  or in Rust; scripts injected into pages are tested by
+  `apps/ipad/Tests/PageScripts/run.sh`. The SwiftUI shell cannot run here:
+  say so when a change is untested on the device.
 - Hardware tests are manual: `just hw-check` prints IMU rate, drift over 60 s,
   and display mode. Record results in `.claude/memory/hardware-log.md`.
 

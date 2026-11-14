@@ -8,7 +8,7 @@
                  └───────────────▲──────────────────────────────────────────┬────────────────┘
                                  │ frames                                   │ accel/gyro/mag
 ┌────────────────────────────────┴──────────────────────────────────────────▼───────────────────┐
-│ host (perchd on Linux/Win/macOS, or Perch Android app)                                        │
+│ host (perchd on Linux/Win/macOS, or the Perch Android / iPad app)                             │
 │                                                                                               │
 │   perch-hal ─► perch-tracking ─► Pose (quat, ω, t)                                            │
 │                      │                                                                        │
@@ -27,6 +27,13 @@
                        │ controllers: Android, iPad, CLI │
                        └────────────────────────────────┘
 ```
+
+The iPad host is the same picture with two boxes swapped by what iPadOS
+permits: the pose comes from `perch_tracking::external::ExternalTracker`, fed
+with orientations from Bose AR headphones over Bluetooth LE (the glasses' USB
+sensor is closed to apps), and there is no capture or compositor: each window
+is a live web view whose layer takes the homography from
+`perch-space::Projector` directly. See `docs/PLATFORMS.md`, iPadOS.
 
 ## Data flow per frame (host)
 

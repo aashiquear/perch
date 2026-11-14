@@ -9,7 +9,7 @@ One Rust core; per-platform shells. "Host" = drives the glasses. "Controller"
 | Android (S24 Ultra) | ✅ app host mode | ✅ app touchpad | MediaProjection mirror ✅, app-per-display (see below) | Accessibility + IME ✅ | DeX caveats below |
 | Windows 11 | planned (M4) | — | Windows.Graphics.Capture | SendInput | ar-drivers' rusb works on Windows with WinUSB (Zadig) |
 | macOS | planned (M4) | — | ScreenCaptureKit | CGEvent | needs Screen Recording + Accessibility permissions |
-| iPadOS / iOS | ❌ (no USB IMU access) | ✅ app | — | — | best trackpad of the bunch; Pencil hover moves pointer |
+| iPadOS (M2, 27.0.1) | ✅ app, Glasses tab: head motion from Bose AR headphones (no USB IMU access), 60 Hz | ✅ app, Laptop remote tab | web pages and local files in its own windows (no other apps) | genuine taps + script into its own web views | see below and `apps/ipad/README.md` |
 
 ## Linux
 
@@ -103,23 +103,39 @@ for full fidelity use Shizuku `INJECT_EVENTS` (M4).
 Build: `cargo install cargo-ndk && rustup target add aarch64-linux-android`,
 then `./gradlew assembleDebug` (runs `cargo ndk` for `perch-ffi --features rokid`).
 
-## iPadOS / iOS
+## iPadOS
 
-Two tabs, as on Android. **Laptop remote**: the Android panel and
-pop-up (touchpad, keyboard, controller skins) aimed at a host on the network:
-`NWBrowser` for Bonjour, `URLSessionWebSocketTask` for control,
-`NWConnection` UDP for input. A keyboard, trackpad or mouse attached to the
-iPad is forwarded (`UIKey.keyCode` is already a HID usage; ⌘ → Ctrl by
-default). Built on Linux with xtool, no Mac needed: `apps/ipad/README.md`.
+Two tabs, as on Android.
 
-Measured on an M2 iPad, iPadOS 27.0.1 (2026-11-14, `.claude/memory/hardware-log.md`):
-an app can draw on the glasses (1920×1080, 60 Hz), but every way of opening
-the Rokid USB sensor is refused by the sandbox. Host mode therefore takes
-head motion from Bose AR headphones (NC 700: game-rotation vector over
-Bluetooth LE, 49 Hz) through `perch_tracking::external`, and its windows are
-web pages and local files the app renders itself (iPadOS cannot show other
-apps). Tracking is coarser than the glasses' 1 kHz IMU. Details and the
-repeatable check: `apps/ipad/README.md`, Glasses tab → Check.
+**Glasses (host).** Measured on an M2 iPad, iPadOS 27.0.1 (2026-11-14,
+`.claude/memory/hardware-log.md`):
+
+- *Display:* iPadOS hands the app an external-display scene for the glasses,
+  1920×1080, 60 Hz at most. The app must be in the foreground; otherwise the
+  glasses mirror the iPad.
+- *Head motion:* every way of opening the Rokid USB sensor (IOKit device and
+  interfaces, HID manager) is refused by the sandbox, and there is no
+  user-space USB framework. So the pose comes from Bose AR headphones
+  (`docs/DEVICE-BOSE-AR.md`: game-rotation vector over Bluetooth LE, 49 Hz)
+  through `perch_tracking::external`. A DriverKit USB driver would be the
+  sanctioned way to the glasses' own sensor (paid programme, entitlement from
+  Apple, Xcode); not attempted.
+- *Windows:* an app cannot show other apps, so each window is a live
+  `WKWebView` (page, web app, local file). The Rust homography is set on the
+  view's layer as a `CATransform3D`; nothing is captured or re-encoded.
+- *Input:* taps are synthesised as real `UITouch` events (UIKit internals,
+  with a scripted fallback and a switch); scroll, keys and text are performed
+  by script in the page; controllers reach pages as a standard gamepad
+  behind `navigator.getGamepads()`. Sign-in happens on the iPad screen with
+  system password AutoFill.
+
+**Laptop remote (controller).** `NWBrowser` for Bonjour,
+`URLSessionWebSocketTask` for control, `NWConnection` UDP for input. A
+keyboard, trackpad or mouse attached to the iPad is forwarded (`UIKey.keyCode`
+is already a HID usage; ⌘ → Ctrl by default).
+
+Built, signed and installed from Linux with xtool, no Mac needed; releases
+carry an unsigned IPA. `apps/ipad/README.md`.
 
 ## Windows / macOS (M4)
 

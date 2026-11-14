@@ -87,7 +87,7 @@ pub enum Platform {
     MacOs,
     /// Android phone/tablet (host app, incl. Samsung DeX).
     Android,
-    /// iPadOS (controller only; cannot drive glasses IMU).
+    /// iPadOS (controller for a host; as a host it tracks the head with a headset, not the glasses' IMU).
     IPadOs,
     /// iOS phone (controller only).
     Ios,

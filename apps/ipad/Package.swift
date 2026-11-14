@@ -1,6 +1,6 @@
 // swift-tools-version: 6.0
 // Perch for iPad / iPhone. Built on Linux with xtool (https://xtool.sh) or on a
-// Mac with Xcode (`xtool dev generate-xcode-project`, or XcodeGen + project.yml).
+// Mac with Xcode (`xtool dev generate-xcode-project`).
 //
 // `PerchCore` is plain Foundation (wire format, gestures, state parsing) and is
 // tested on the build host: `PERCH_CORE_ONLY=1 swift test`. The variable leaves

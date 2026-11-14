@@ -3,8 +3,8 @@
 **Your Rokid Max becomes a room full of screens.** Perch is a viewing platform
 for XR glasses: it turns the glasses from a single bobbing mirror into a set of
 windows pinned in space around you, with full 3DOF head tracking, driven by a
-Linux laptop or by an Android phone on its own. Open source, no Rokid Station,
-no cloud.
+Linux laptop, or by an Android phone or an iPad on its own. Open source, no
+Rokid Station, no cloud.
 
 Put on the glasses. Your editor floats dead ahead, a terminal to the left, a
 browser to the right, a video above. Turn your head and they stay where you
@@ -29,23 +29,25 @@ controller going to whichever one you are looking at.
 - **A controller when you want one.** The phone becomes an Xbox-style pad, a
   racing wheel or a flight stick that games, Chrome and cloud-gaming apps see
   as a real controller.
-- **A dashboard on the device you hold.** The same panel on Linux and Android:
+- **A dashboard on the device you hold.** The same panel on Linux, Android and iPad:
   glasses status, a layout map, square one-tap actions, window cards, sound
   output, glasses brightness, light and dark themes.
 
-## Two ways to run it
+## Three ways to run it
 
-| | Linux laptop as host | Android phone as host |
-|---|---|---|
-| Glasses | USB-C to the laptop | USB-C to the phone |
-| Windows | any app window, moved to the glasses with **Ctrl+Alt+G**; each is a virtual monitor GNOME creates for Perch | any installed app, picked from a list; each runs on its own display |
-| Control | laptop keyboard + trackpad, chord to switch (**Ctrl+Alt+P**), on-glasses bar | pop-up touchpad / mouse mode, d-pad, keyboard bar, Bluetooth devices, virtual gamepad |
-| Extras | sound to the glasses, natural scrolling, phone or iPad as a remote trackpad | portrait or landscape per window, apps rotate as on a phone, app close, phone-screen mirror |
-| Needs | Ubuntu 24.04+ with GNOME on Wayland | Android 14+, DisplayPort over USB-C, [Shizuku](https://shizuku.rikka.app) |
+| | Linux laptop as host | Android phone as host | iPad as host |
+|---|---|---|---|
+| Glasses | USB-C to the laptop | USB-C to the phone | USB-C to the iPad |
+| Windows | any app window, moved to the glasses with **Ctrl+Alt+G**; each is a virtual monitor GNOME creates for Perch | any installed app, picked from a list; each runs on its own display | web pages, web apps and files (video, PDF), each in its own window with an address bar and bookmarks; iPadOS does not let an app show other apps |
+| Control | laptop keyboard + trackpad, chord to switch (**Ctrl+Alt+P**), on-glasses bar | pop-up touchpad / mouse mode, d-pad, keyboard bar, Bluetooth devices, virtual gamepad | the same pop-up: touchpad, d-pad, keyboard, controller skins, Bluetooth keyboard and controllers |
+| Extras | sound to the glasses, natural scrolling, phone or iPad as a remote trackpad | portrait or landscape per window, apps rotate as on a phone, app close, phone-screen mirror | head tracking from Bose headphones, fill-view mode for cloud gaming, sign-in with saved passwords, pages restored next time |
+| Needs | Ubuntu 24.04+ with GNOME on Wayland | Android 14+, DisplayPort over USB-C, [Shizuku](https://shizuku.rikka.app) | iPad with USB-C display output (tested: M2, iPadOS 27); Bose AR headphones for head tracking (tested: NC 700); 60 Hz |
 
-Both run the same Rust core: tracking, spatial layout, projection and the
-wire protocol are shared crates with tests; Kotlin and the daemon are thin
-shells around them.
+All three run the same Rust core: tracking, spatial layout, projection and
+the wire protocol are shared crates with tests; Kotlin, Swift and the daemon
+are thin shells around them. The iPad differs in one thing it cannot help:
+iPadOS refuses apps the glasses' motion sensor, so it takes head motion from
+headphones instead ([apps/ipad/README.md](apps/ipad/README.md)).
 
 ## Status (November 2026)
 
@@ -116,7 +118,7 @@ Prerequisites:
 
 First run:
 
-1. Install `perch-vX.Y.Z-android.apk` from the release (allow unknown apps).
+1. Install `perch-vX.Y.Z-android-debug.apk` from the release (allow unknown apps).
 2. Open Perch → the Shizuku card → **Allow**. The Shizuku tile reads **on**.
 3. Plug in the glasses, accept the USB prompt, tap **Start**. The status reads
    `tracking Rokid Max`. **Calibrate** once with the glasses on a table.
@@ -139,6 +141,31 @@ Apps that block screen capture (banking, DRM video) show black; the card
 says so. The **Laptop remote** tab points the same pop-up at a laptop running
 `perchd`: touchpad, keyboard, arrow pad and the gamepad skins, which the
 laptop sees as a real Xbox-style controller.
+
+### iPad — tablet as the host
+
+Prerequisites: an iPad whose USB-C port drives a display (tested: M2,
+iPadOS 27), and Bose AR headphones for head tracking (tested: Noise
+Cancelling Headphones 700). Without headphones the windows stay in front of
+your eyes.
+
+1. Download `perch-vX.Y.Z-ipad-unsigned.ipa` from the release and install it
+   with [xtool](https://xtool.sh) (`xtool install <file>`, on Linux, Windows
+   or macOS), AltStore or Sideloadly. They sign it with your Apple ID: an
+   iPad only runs apps signed for its owner, so the release cannot carry a
+   signed one. A free Apple ID's signature lasts 7 days; install again to
+   renew.
+2. Plug in the glasses and open Perch → **Glasses**. Switch the headphones
+   on, tap **Head tracking**, look straight ahead and tap **Recenter**.
+3. Tap a bookmark or **Add window** (address, search, or a file from the
+   iPad). The focused window's card has the address bar; ☆ adds a bookmark.
+4. **Touchpad** and **Gamepad** open the same pop-up as on Android. *fill
+   view* makes a window the whole panel for games; *on iPad* brings a page
+   to the iPad screen to sign in with your saved passwords.
+
+Keep Perch on screen: when another app is in front, iPadOS shows the
+mirrored iPad on the glasses. The **Laptop remote** tab is the same remote as
+on Android. Everything else: [apps/ipad/README.md](apps/ipad/README.md).
 
 ## Developer workflow
 
@@ -164,22 +191,30 @@ adb install -r app/build/outputs/apk/debug/app-debug.apk
 gradle testDebugUnitTest                         # postcard byte parity with Rust
 ```
 
+iPad, from Linux, no Mac needed ([apps/ipad/README.md](apps/ipad/README.md)):
+
+```bash
+rustup target add aarch64-apple-ios              # plus Swift and `xtool setup` once
+just ipad                                        # Rust core for iOS, build, sign, install on the iPad on USB
+just ipad-test                                   # Swift core tests + injected page scripts in headless Chrome
+```
+
 Rules of the road ([CLAUDE.md](CLAUDE.md)): logic lives in the Rust crates with
 tests and platform code is a thin shell; wire-format changes bump
 `PROTOCOL_VERSION` and update `docs/PROTOCOL.md`; `cargo test` stays green
 without features or hardware.
 
-Releasing: tag `vX.Y.Z` on `main`; `.github/workflows/release.yml` builds the
-Linux tarball and attaches it to the GitHub release. The Android APK is
-attached by hand from `apps/android/app/build/outputs/apk/debug/app-debug.apk`
-until the Android job is wired into the workflow.
+Releasing: tag `vX.Y.Z` on `main`; `.github/workflows/release.yml` builds and
+attaches the Linux tarball, the Android debug APK and the unsigned iPad IPA
+(the last on a Mac runner), each with a SHA-256 file.
 
 ## Repository layout
 
 ```
 crates/
   perch-proto        wire types (poses, windows, input, commands, events)
-  perch-tracking     IMU → pose (Mahony AHRS, bias calibration, prediction)
+  perch-tracking     IMU → pose (Mahony AHRS, bias calibration, prediction);
+                     `external`: headset orientation → pose
   perch-space        windows in the world, projection, smooth follow, presets
   perch-hal          glasses backends: rokid (ar-drivers), mock (replay)
   perch-net          mDNS, WebSocket control, UDP stream
@@ -190,7 +225,7 @@ crates/
   perch-cli          perch
   perch-ffi          C ABI for Android/iOS
 apps/android         Kotlin/Compose host + touchpad app
-apps/ipad            SwiftUI remote: panel + touchpad + gamepad (SwiftPM, built with xtool)
+apps/ipad            SwiftUI host + laptop remote (SwiftPM, built with xtool on Linux)
 docs/                architecture, protocol, device notes, platforms, roadmap, ADRs
 udev/                Linux device permissions
 tools/fixtures       IMU recordings for replay tests

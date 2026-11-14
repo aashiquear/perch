@@ -1,7 +1,7 @@
 # Use cases — how to do each thing with Perch today
 
 Each section is a recipe for a real session. Linux/GNOME is the host that
-works end to end (v0.1.0); the Android host works on the S24 Ultra (see
+works end to end; the Android host works on the S24 Ultra (see
 [ANDROID.md](ANDROID.md)). Keyboard chords are the Linux defaults
 (`[input]` in `perchd.toml`).
 
@@ -70,3 +70,14 @@ renders the same 3DOF windows. Choose apps from the Perch panel; each runs
 in its own glasses display, portrait or landscape; a pop-up touchpad on the
 phone moves a cursor in the focused window. See [ANDROID.md](ANDROID.md) for
 what works without root and what needs Shizuku.
+
+## 7. Tablet as host (iPad) — travel
+
+A seat, the glasses, headphones, no laptop. Plug the glasses into the iPad;
+Bose AR headphones supply the head tracking over Bluetooth while they play
+the sound. Windows are web pages and files: a film downloaded for the flight
+in one, a document in another, or a cloud game in *fill view* with a
+controller. Sign in once on the iPad screen with your saved passwords; pages
+and sessions are there next time. See
+[apps/ipad/README.md](../apps/ipad/README.md) for what iPadOS allows and
+what it does not (no other apps in windows, 60 Hz).

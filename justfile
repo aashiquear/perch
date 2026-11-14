@@ -50,6 +50,10 @@ ipad:
     cargo rustc -p perch-ffi --release --target aarch64-apple-ios --crate-type staticlib
     cd apps/ipad && xtool dev build --ipa && xtool install xtool/Perch.ipa
 
+# iPad: the unsigned IPA the release carries (dist/perch-ipad-unsigned.ipa)
+ipad-ipa:
+    scripts/ipad-ipa.sh
+
 # iPad: pure-Swift core tests on this machine
 ipad-test:
     cd apps/ipad && PERCH_CORE_ONLY=1 swift test
